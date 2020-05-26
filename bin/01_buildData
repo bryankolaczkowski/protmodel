@@ -15,12 +15,13 @@ OUTDIR=../data
 
 # 1. get dssp properties for all current entries in PDB
 # NOTE: this will take a few hours
-#./getPDBdata -o ${OUTDIR}/pdbdata-strctinfo2 --exclude ${OUTDIR}/exclude_ids.txt
+./getPDBdata -o ${OUTDIR}/pdbdata-strctinfo2 --exclude ${OUTDIR}/exclude_ids.txt
 
 # 2. cluster PDB sequences by sequence identity
 # NOTE: this will take a couple minutes
-#./clustPDBdata --seqid 0.1 -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/clusters.csv
+./clustPDBdata --seqid 0.1 -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/clusters.csv
 
 # 3. split PDB data into training, validate and testing data
 # NOTE: this will take less than 1/2 hour
 ./splitPDBdata -c ${OUTDIR}/clusters.csv -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/pdbdata-tfsplit
+
