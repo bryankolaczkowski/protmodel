@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+
+################################################################################
+# download entire current PDB and process to extract structural information
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import distutils.util
+import tempfile
+import argparse
+import glob
+import csv
+
+from prot3d._version import __version__
+
+################################################################################
+# BEG DEFINE DEFAULTS
+
+# END DEFINE DEFAULTS
+################################################################################
+################################################################################
+# BEG CLASS DEFINITIONS
+
+
+# END CLASS DEFINITIONS
+################################################################################
+################################################################################
+# BEG HELPER FUNCTIONS
+
+def _get_seq(infname):
+    """returns protein sequence from infname"""
+    seq = ''
+    with open(infname, 'r') as handle:
+        handle.readline() # skip header
+        for line in handle:
+            seq += line.strip().split(',')[0]
+    return seq
+
+def _write_seq(outfile, infname):
+    """writes protein sequence from infname to outfile"""
+    seqid = infname.split(os.path.sep)[-1].split('.csv')[0]
+    seqse = _get_seq(infname)
+    outfile.write('>{}\n{}\n'.format(seqid, seqse))
+    return
+
+# END HELPER FUNCTIONS
+################################################################################
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+    # parse command-line arguments
+    parser = argparse.ArgumentParser(
+                      description='clusters sequences from PDB',
+                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # general options
+    parser.add_argument('--version', action='version', version=__version__)
+    parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                        dest='verbose',
+                        help='show runtime information on stdout',
+                        metavar='y|n')
+    parser.add_argument('-d', '--directory', dest='directory',
+                        help='set getPDBdata directory',
+                        metavar='DIR', required=True)
+    parser.add_argument('-o', '--outfile', dest='outfile',
+                        help='set output file name',
+                        metavar='FILE', required=True)
+    parser.add_argument('--seqid', type=float, dest='seqidentity',
+                        help='set proportion sequence identity for clustering',
+                        metavar='PROP')
+    parser.set_defaults(verbose=True,
+                        directory=None,
+                        outfile=None,
+                        seqidentity=0.1)
+    # parse command-line arguments
+    args = parser.parse_args()
+    if args.directory[-1] == '/':
+        args.directory = args.directory[:-1]
+    # args.directory must work from a random temporary directory...
+    args.directory = os.path.abspath(os.path.realpath(args.directory))
+
+    workingdir = os.getcwd()
+    with tempfile.TemporaryDirectory(prefix='clustPDBdata-') as tempdir:
+        os.chdir(tempdir)
+
+
+        if args.verbose:
+            sys.stdout.write('writing fasta file...')
+            sys.stdout.flush()
+        # write all sequences in fasta format
+        fasta_fname = 'seqs.fasta'
+        with open(fasta_fname, 'w') as outf:
+            for fname in glob.iglob('{}{}*_*.csv'.format(args.directory,
+                                                         os.path.sep)):
+                _write_seq(outf, fname)
+        if args.verbose:
+            sys.stdout.write('done.\nclustering sequences...\n')
+
+        mmseqs_redirect = '> /dev/null'
+        if args.verbose:
+            mmseqs_redirect = ''
+
+        # create mmseqs database
+        cmd = 'mmseqs createdb {} DB {}'.format(fasta_fname, mmseqs_redirect)
+        os.system(cmd)
+
+        # cluster sequences
+        cmd = 'mmseqs linclust DB DB_clu tmp --min-seq-id {} {}'.format(
+                                            args.seqidentity, mmseqs_redirect)
+        os.system(cmd)
+
+        # create tab-separated cluster file
+        cluster_fname = 'clusters.tsv'
+        cmd = 'mmseqs createtsv DB DB DB_clu {} {}'.format(cluster_fname,
+                                                           mmseqs_redirect)
+        os.system(cmd)
+
+        if args.verbose:
+            sys.stdout.write('done.\nconverting clusters to file...')
+            sys.stdout.flush()
+
+        # read cluster file
+        clusters = {}
+        with open(cluster_fname, 'r') as handle:
+            for line in handle:
+                linearr = line.split()
+                k = linearr[0]
+                v = linearr[1]
+                if k not in clusters.keys():
+                    clusters[k] = []
+                clusters[k].append(v)
+
+        os.chdir(workingdir)
+
+    # convert clusters to .csv
+    with open(args.outfile, 'w') as outfile:
+        writer = csv.writer(outfile, dialect='unix',
+                            quoting=csv.QUOTE_MINIMAL)
+        for v in clusters.values():
+            writer.writerow(v)
+
+    if args.verbose:
+        sys.stdout.write('finished.\n')
+
+# END MAIN
+################################################################################

@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+
+################################################################################
+# splits pdb data into training, validation and testing data sets
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' # crank down tensorflow log
+
+import multiprocessing
+import distutils.util
+import argparse
+import math
+import glob
+import csv
+
+import tensorflow as tf
+import numpy      as np
+
+import prot3d.aafeatures
+from prot3d._version import __version__
+
+################################################################################
+# BEG DEFINE DEFAULTS
+
+DEF_RANDSEED  = 2089916
+DEF_TRAINP    = 0.8
+DEF_VALIDATEP = 0.1
+DEF_TESTP     = 0.1
+DEF_AAMAPNAME = list(prot3d.aafeatures.AAENCODING_FNS.keys())[0]
+
+# END DEFINE DEFAULTS
+################################################################################
+################################################################################
+# BEG CLASS DEFINITIONS
+
+class SplitDataException(Exception):
+    """splitting data failed"""
+    pass
+
+class DataVerifyException(SplitDataException):
+    """data verification failed"""
+    pass
+
+class DataWriter(multiprocessing.Process):
+    """writes amino-acid data to files"""
+    FILE_PREFIX    = 'd'    # prefix files with this
+    FILE_EXTENSION = '.tfr' # suffix files with this
+    FILE_BATCHSIZE = 10000  # write approximately this many records per file
+    INF_EXTENSION  = '.csv' # input file name extension
+
+    def __init__(self, processid, grouplist, indir, outdir, aamap):
+        """initialize this DataWriter object"""
+        multiprocessing.Process.__init__(self)
+        self.id     = processid
+        self.data   = grouplist
+        self.indir  = indir
+        self.outdir = outdir
+        self.aamap  = aamap
+        return
+
+    def _get_filename(self, file_id, decimal_places):
+        """returns a file name for the given file_id and decimal_places"""
+        nzeros = decimal_places - int(math.log10(file_id))
+        fname  = self.outdir + os.path.sep + self.FILE_PREFIX + '0'*nzeros + \
+                 str(file_id) + self.FILE_EXTENSION
+        return fname
+
+    def _get_ser_data(self, infname):
+        """
+        returns arrays that can be serialized to a tensorflow data file
+
+        pid = protein identifier: (string)
+        aas = amino acid encodings: ravelled numpy array (float)
+        ssr = secondary structure encodings: numpy array (integer)
+        asa = relative solvent-accessible surface areas: numpy array (float)
+        phi = phi angles: numpy array (float)
+        psi = psi angles: numpy array (float)
+        """
+        aas_arr = []
+        ssr_arr = []
+        asa_arr = []
+        phi_arr = []
+        psi_arr = []
+        with open(infname, 'r') as handle:
+            reader = csv.reader(handle, dialect='unix')
+            reader.__next__() # skip single file header
+            for row in reader:
+                aas_arr.append(self.aamap[row[0]])
+                ssr_arr.append(prot3d.aafeatures.SSTRUCT_TO_INT[row[1]])
+                asa_arr.append(float(row[2]))
+                phi_arr.append(float(row[3]))
+                psi_arr.append(float(row[4]))
+        pid = infname.split(os.path.sep)[-1].split(self.INF_EXTENSION)[0]
+        aas = np.array(aas_arr).ravel()
+        ssr = np.array(ssr_arr)
+        asa = np.array(asa_arr)
+        phi = np.array(phi_arr)
+        psi = np.array(psi_arr)
+        return (pid, aas, ssr, asa, phi, psi)
+
+    def _float_features(self, value):
+        """return tensorflow list of floats from numpy list of floats"""
+        return tf.train.Feature(float_list=tf.train.FloatList(value=value))
+
+    def _int64_features(self, value):
+        """return tensorflow list of ints from numpy list of ints"""
+        return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
+
+    def _int64_feature(self, value):
+        """return tensorflow list of ints from python int"""
+        return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+    def _bytes_feature(self, value):
+        """return tensorflow list of bytes from string"""
+        enc = value.encode('utf-8')
+        return tf.train.Feature(bytes_list=tf.train.BytesList(value=[enc]))
+
+    def _write_data_to_file(self, infilename, outfile):
+        """writes data from infilename to outfile"""
+        # generate serializable objects from the input file
+        pid, aas, ssr, asa, phi, psi = self._get_ser_data(infilename)
+        # generate data feature structure
+        data = {
+          'identifier'              : self._bytes_feature(pid),
+          'residues'                : self._float_features(aas),
+          'secondary_structures'    : self._int64_features(ssr),
+          'solvent_accessible_areas': self._float_features(asa),
+          'phi_angles'              : self._float_features(phi),
+          'psi_angles'              : self._float_features(psi),
+        }
+        # write data feature
+        out_feat = tf.train.Example(features=tf.train.Features(feature=data))
+        out_str  = out_feat.SerializeToString()
+        outfile.write(out_str)
+        return
+
+    def run(self):
+        """write data in a separate process"""
+        # set up batch files
+        num_dec_plcs = int(math.log10(self.data.size/self.FILE_BATCHSIZE))
+        if num_dec_plcs < 0:
+            num_dec_plcs = 0
+        total_num_files = math.ceil(self.data.size/self.FILE_BATCHSIZE)
+        true_batchsize  = math.ceil(self.data.size/total_num_files)
+        curr_file_id = 1
+        curr_file    = tf.io.TFRecordWriter(self._get_filename(curr_file_id,
+                                                               num_dec_plcs))
+        # read-write data
+        data_written = 0
+        for seqid in self.data:
+            # on to the next file...
+            if data_written >= true_batchsize:
+                curr_file.close()
+                data_written  = 0
+                curr_file_id += 1
+                curr_file = tf.io.TFRecordWriter(
+                                  self._get_filename(curr_file_id, num_dec_plcs)
+                                 )
+            # write data
+            infname = self.indir + os.path.sep + seqid + self.INF_EXTENSION
+            self._write_data_to_file(infname, curr_file)
+            data_written += 1
+        # make sure we close the last output file handle
+        # is there a way to check if a TFRecordWriter is closed?
+        # writer.closed doesn't work.
+        try:
+            curr_file.close()
+        except:
+            pass
+        return
+
+# END CLASS DEFINITIONS
+################################################################################
+################################################################################
+# BEG HELPER FUNCTIONS
+
+def _fix_dirname(dirname):
+    """remove trailing path separater from directory name"""
+    if dirname[-1] == os.path.sep:
+        return dirname[:-1]
+    return dirname
+
+def _fix_pdist(problist):
+    """normalizes problist so it sums to 1.0"""
+    tot = sum(problist)
+    return [ x/tot for x in problist ]
+
+def _get_seq_count(seq_groups, idx1, idx2):
+    """returns number of sequences in seq_groups[idx1:idx2)"""
+    count = 0
+    for x in seq_groups[idx1:idx2]:
+        count += x.size
+    return count
+
+def _write_data(train_validate_test, indir, outdir, aa_map):
+    """writes train, validate, test data from indir to outdir"""
+    # set up directory structure
+    train_dr_name = 'train'
+    valid_dr_name = 'validate'
+    ttest_dr_name = 'test'
+    datadirs = [outdir + os.path.sep + train_dr_name,
+                outdir + os.path.sep + valid_dr_name,
+                outdir + os.path.sep + ttest_dr_name]
+    for datadir in datadirs:
+        if not os.path.isdir(datadir):
+            os.makedirs(datadir)
+    # initialize data writer processes
+    write_processes = []
+    for i in range(len(datadirs)):
+        wproc = DataWriter(i,
+                           train_validate_test[i],
+                           indir,
+                           datadirs[i],
+                           aa_map)
+        write_processes.append(wproc)
+    # lanuch data writer processes
+    for wproc in write_processes:
+        wproc.start()
+    # collect data writer processes
+    for wproc in write_processes:
+        wproc.join()
+    # write meta-data file
+    train_samples = train_validate_test[0].size
+    valid_samples = train_validate_test[1].size
+    ttest_samples = train_validate_test[2].size
+    data_channels = aa_map[prot3d.aafeatures.MISSINGAA].size
+    md_fname = outdir + os.path.sep + 'metadata.txt'
+    with open(md_fname, 'w') as outfile:
+        outfile.write('secondary_structure_count: {}\n'.format(len(
+                                              prot3d.aafeatures.SSTRUCT_CODES)))
+        outfile.write('secondary_structure_encoding:\n')
+        for ss_str in prot3d.aafeatures.SSTRUCT_CODES:
+            outfile.write('  {} {}\n'.format(ss_str,
+                                      prot3d.aafeatures.SSTRUCT_TO_INT[ss_str]))
+        outfile.write('data_channels: {}\n'.format(data_channels))
+        outfile.write('directories:\n')
+        outfile.write('  train:    {}\n'.format(train_dr_name))
+        outfile.write('  validate: {}\n'.format(valid_dr_name))
+        outfile.write('  test:     {}\n'.format(ttest_dr_name))
+        outfile.write('sample_counts:\n')
+        outfile.write('  train:      {}\n'.format(train_samples))
+        outfile.write('  validate:   {}\n'.format(valid_samples))
+        outfile.write('  test:       {}\n'.format(ttest_samples))
+    return
+
+def _verify_data_count(directory):
+    """returns total number of tensorflow data records in the directory"""
+    total_count = 0
+    for f in glob.glob(directory + os.path.sep + '*'):
+        my_seq_count = 0
+        for record in tf.data.TFRecordDataset(f):
+            my_seq_count += 1
+            total_count  += 1
+        if my_seq_count == 0:
+            sys.stderr.write(
+            'WARNING: file {} has no data records!\n'.format(f))
+    return total_count
+
+def _split_data(clusterfilename, datadirectory, outdirectory, randomseed,
+                aaencodingmap, trainp, validatep, testp, verbose):
+    """splits the data into (approx) trainp, validatep, testp"""
+
+    # set up random number generator
+    rng = np.random.default_rng(randomseed)
+
+    if verbose:
+        sys.stdout.write('random seed    {}\n'.format(randomseed))
+        sys.stdout.write('cluster file   {}\n'.format(clusterfilename))
+        sys.stdout.write('data directory {}\n'.format(datadirectory))
+        sys.stdout.write('out  directory {}\n'.format(outdirectory))
+        sys.stdout.write('trying to split data into ')
+        sys.stdout.write('{:.2f} training, '.format(round(trainp,2)))
+        sys.stdout.write('{:.2f} validation '.format(round(validatep,2)))
+        sys.stdout.write('and {:.2f} testing.\n'.format(round(testp,2)))
+
+    # BEG DATA READ ############################################################
+    if verbose:
+        sys.stdout.write('reading group sizes... ')
+        sys.stdout.flush()
+    # get a list of groups and membership, sorting everything to insure
+    # reproducibility with the same random seed.
+    # we will split the data by group, to insure that no group is split
+    # across train, validate and/or test sets. This makes sure that
+    # there are no 'similar' sequences across sets, where 'similar' is
+    # defined as same group membership.
+    sequence_groups_arr = []
+    with open(clusterfilename, 'r', newline='') as handle:
+        reader = csv.reader(handle, dialect='unix')
+        for row in reader:
+            garr = np.array(row)
+            garr.sort()
+            sequence_groups_arr.append((garr[0], garr))
+    # sort groups by 'smallest' sequence id
+    sequence_groups_arr.sort()
+    # pack sequences into a list of numpy arrays
+    sequence_groups = np.array([ x[1] for x in sequence_groups_arr ],
+                               dtype=object)
+    # calculate total sequence count
+    total_seq_count = 0
+    for x in sequence_groups:
+        total_seq_count += x.size
+    if verbose:
+        sys.stdout.write('done. ')
+        sys.stdout.write('found {} groups '.format(sequence_groups.size))
+        sys.stdout.write('and {} sequences\n'.format(total_seq_count))
+    if sequence_groups.size < 3:
+        raise(SplitDataException('cant split {} groups into 3 pieces\n'.format(
+                                 sequence_groups.size)))
+    # END DATA READ ############################################################
+    # BEG GROUP SHUFFLE ########################################################
+    if verbose:
+        sys.stdout.write('shuffling groups... ')
+        sys.stdout.flush()
+    # randomize groups before split
+    rng.shuffle(sequence_groups)
+    if verbose:
+        sys.stdout.write('done.\n')
+    # END GROUP SHUFFLE ########################################################
+    # BEG DATA SPLIT ###########################################################
+    if verbose:
+        sys.stdout.write('splitting data... ')
+        sys.stdout.flush()
+    # initialize split into train, validate, test data
+    idx_1 = int(sequence_groups.size * trainp)
+    idx_2 = int(sequence_groups.size * (trainp + validatep))
+    train_n    = _get_seq_count(sequence_groups, 0,     idx_1)
+    validate_n = _get_seq_count(sequence_groups, idx_1, idx_2)
+    test_n     = _get_seq_count(sequence_groups, idx_2, -1   )
+    if verbose:
+        sys.stdout.write('done.\n')
+        # training data
+        real_train_p = round(train_n/total_seq_count, 4)
+        sys.stdout.write('  {:.4f} training '.format(real_train_p))
+        sys.stdout.write('    ({} sequences, '.format(train_n))
+        sys.stdout.write('  {} groups)\n'.format(idx_1))
+        # validation data
+        real_validate_p = round(validate_n/total_seq_count, 4)
+        sys.stdout.write('  {:.4f} validation '.format(real_validate_p))
+        sys.stdout.write('  ({}  sequences, '.format(validate_n))
+        sys.stdout.write('  {}  groups)\n'.format(idx_2-idx_1))
+        # testing data
+        real_test_p = round(test_n/total_seq_count, 4)
+        sys.stdout.write('  {:.4f} testing '.format(real_test_p))
+        sys.stdout.write('     ({}  sequences, '.format(test_n))
+        sys.stdout.write('  {}  groups)\n'.format(sequence_groups.size-idx_2))
+    # END DATA SPLIT ###########################################################
+    # BEG DATA SHUFFLE #########################################################
+    if verbose:
+        sys.stdout.write('shuffling each data set... ')
+        sys.stdout.flush()
+    # unroll and shuffle each data split
+    train_data = np.concatenate(sequence_groups[    0:idx_1]).ravel()
+    valid_data = np.concatenate(sequence_groups[idx_1:idx_2]).ravel()
+    ttest_data = np.concatenate(sequence_groups[idx_2:-1   ]).ravel()
+    rng.shuffle(train_data)
+    rng.shuffle(valid_data)
+    rng.shuffle(ttest_data)
+    if verbose:
+        sys.stdout.write('done.\n')
+    # END DATA SHUFFLE #########################################################
+    # BEG DATA WRITE ###########################################################
+    if verbose:
+        sys.stdout.write('writing data... ')
+        sys.stdout.flush()
+    _write_data((train_data, valid_data, ttest_data),
+                datadirectory, outdirectory, aaencodingmap)
+    if verbose:
+        sys.stdout.write('done.\n')
+    # END DATA WRITE ###########################################################
+    # BEG DATA VERIFY ##########################################################
+    if verbose:
+        sys.stdout.write('verifying data write... ')
+        sys.stdout.flush()
+        # parse metadata
+        r_train_d = ''
+        r_valid_d = ''
+        r_ttest_d = ''
+        with open(outdirectory + os.path.sep + 'metadata.txt', 'r') as handle:
+            nsstrs = int(handle.readline().split()[-1])
+            handle.readline()
+            for i in range(nsstrs):
+                handle.readline()
+            data_chnls = int(handle.readline().split()[-1])
+            if data_chnls != len(aaencodingmap[prot3d.aafeatures.MISSINGAA]):
+                raise DataVerifyException(
+                'EXCEPTION: metadata channels failed')
+            handle.readline()
+            r_train_d = outdirectory + os.path.sep + \
+                        handle.readline().split()[-1]
+            r_valid_d = outdirectory + os.path.sep + \
+                        handle.readline().split()[-1]
+            r_ttest_d = outdirectory + os.path.sep + \
+                        handle.readline().split()[-1]
+            handle.readline()
+            rtran = int(handle.readline().split()[-1])
+            rvaln = int(handle.readline().split()[-1])
+            rtesn = int(handle.readline().split()[-1])
+            if rtran != train_n:
+                raise DataVerifyException(
+                'EXCEPTION: metadata train count failed')
+            if rvaln != validate_n:
+                raise DataVerifyException(
+                'EXCEPTION: metadata validate count failed')
+            if rtesn != test_n:
+                raise DataVerifyException(
+                'EXCEPTION: metadata test count failed')
+
+        # verify train data reads
+        read_train = _verify_data_count(r_train_d)
+        if read_train != train_n:
+            raise DataVerifyException(
+            'EXCEPTION: train data verify failed')
+
+        # verify validate data reads
+        read_valid = _verify_data_count(r_valid_d)
+        if read_valid != validate_n:
+            raise DataVerifyException(
+            'EXCEPTION: validate data verify failed')
+
+        # verify test data reads
+        read_ttest = _verify_data_count(r_ttest_d)
+        if read_ttest != test_n:
+            raise DataVerifyException(
+            'EXCEPTION: test data verify failed')
+
+    if verbose:
+        sys.stdout.write('done.\n')
+    # END DATA VALIDATE ########################################################
+    return
+
+# END HELPER FUNCTIONS
+################################################################################
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+    # parse command-line arguments
+    parser = argparse.ArgumentParser(
+                      description='split PDB data into train, validate, test',
+                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # general options
+    parser.add_argument('--version', action='version', version=__version__)
+    parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                        dest='verbose',
+                        help='show runtime information on stdout',
+                        metavar='y|n')
+    parser.add_argument('-d', '--datadirectory', dest='datadir',
+                        help='set PDB data directory',
+                        metavar='DIR', required=True)
+    parser.add_argument('-c', '--clusterfile', dest='clusterf',
+                        help='set cluster file name',
+                        metavar='FILE', required=True)
+    parser.add_argument('-o', '--outdirectory', dest='outdir',
+                        help='set output directory',
+                        metavar='DIR', required=True)
+    parser.add_argument('--rseed', type=int, dest='rseed',
+                        help='set random number seed',
+                        metavar='INT')
+    parser.add_argument('--aamapfn',
+                        choices=list(prot3d.aafeatures.AAENCODING_FNS.keys()),
+                        dest='aamapname',
+                        help='set amino-acid encoding function')
+    parser.add_argument('--train', type=float, dest='trainp',
+                        help='set training proportion',
+                        metavar='NUM')
+    parser.add_argument('--validate', type=float, dest='valp',
+                        help='set validation proportion',
+                        metavar='NUM')
+    parser.add_argument('--test', type=float, dest='testp',
+                        help='set testing proportion',
+                        metavar='NUM')
+    # set defaults
+    parser.set_defaults(verbose=True,
+                        datadir=None,
+                        clusterf=None,
+                        outdir=None,
+                        rseed=DEF_RANDSEED,
+                        aamapname=DEF_AAMAPNAME,
+                        trainp=DEF_TRAINP,
+                        valp=DEF_VALIDATEP,
+                        testp=DEF_TESTP)
+    # parse command-line arguments
+    args = parser.parse_args()
+
+    args.datadir = _fix_dirname(args.datadir)
+    args.outdir  = _fix_dirname(args.outdir)
+
+    args.trainp, args.valp, args.testp = _fix_pdist([ args.trainp,
+                                                      args.valp,
+                                                      args.testp ])
+
+    # split data
+    try:
+        _split_data(args.clusterf, args.datadir, args.outdir, args.rseed,
+                    prot3d.aafeatures.AAENCODING_FNS[args.aamapname](),
+                    args.trainp, args.valp, args.testp, args.verbose)
+    except Exception as e:
+        sys.stderr.write('EXCEPTION: {}\n'.format(e))
+        raise(e)
+
+    if args.verbose:
+        sys.stdout.write('finished.\n')
+
+# END MAIN
+################################################################################

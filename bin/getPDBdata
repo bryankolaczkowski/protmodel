@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+
+################################################################################
+# download entire current PDB and process to extract structural information
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import multiprocessing
+import distutils.util
+import functools
+import tempfile
+import argparse
+import warnings
+import time
+import glob
+import csv
+import io
+import re
+
+import requests
+import Bio.PDB
+
+from prot3d._version import __version__
+
+################################################################################
+# BEG DEFINE DEFAULTS
+
+PDB_QUERY_URL = 'https://www.rcsb.org/pdb/rest/customReport'
+PDB_SFILE_URL = 'https://files.rcsb.org/download'
+
+# END DEFINE DEFAULTS
+################################################################################
+################################################################################
+# BEG CLASS DEFINITIONS
+
+class DownloadException(Exception):
+    pass
+
+class DSSPException(Exception):
+    pass
+
+# END CLASS DEFINITIONS
+################################################################################
+################################################################################
+# BEG HELPER FUNCTIONS
+
+def _get_pdb_ids(request_url):
+    """
+    Returns a list of PDB IDs at the request_url
+    structures must have at least 1 protein
+    """
+    mol_type_wanted = r'Protein'
+
+    fields = ['structureId',
+              'macromoleculeType',
+              'experimentalTechnique',
+              'releaseDate',
+              'resolution']
+
+    idwldcrd = '?pdbids=*'
+    crepcols = '&customReportColumns={}'.format(','.join(fields))
+    otformat = '&service=wsfile&format=csv'
+
+    request = request_url + idwldcrd + crepcols + otformat
+    result = requests.get(request)
+    result.raise_for_status()
+
+    instream = io.StringIO(result.text, newline='')
+    reader = csv.reader(instream)
+    reader.__next__() # skip csv header
+    filtered_ids = []
+    for row in reader:
+        if re.search(mol_type_wanted, row[1]):
+            filtered_ids.append(row[0].lower())
+    filtered_ids.sort()
+    return filtered_ids
+
+def _get_pdb_file(base_url, pdbid, fname_extension):
+    """
+    Returns the name of a local structure file for the given pdbid and base_url
+    fname_extension should be 'cif' or 'pdb'
+    raises DownloadException on error
+    """
+    outfname = 'structure.{}'.format(fname_extension)
+    full_url  = '{}/{}.{}'.format(base_url, pdbid.upper(), fname_extension)
+    max_tries = 100
+    tries     = 0
+    while tries < max_tries:
+        try:
+            tries += 1
+            # get structure from full_url
+            result = requests.get(full_url, timeout=10)
+            # check result is okay
+            result.raise_for_status()
+            # write local structure file
+            with open(outfname, 'w') as outfile:
+                outfile.write(result.text)
+            return outfname
+        except:
+            pass
+    raise DownloadException(pdbid)
+
+def _write_dssps(outdir, pdbid, dssp_results):
+    """
+    writes dssp results to a series of files in outdir
+    file names will look like outdir/pdbid_n.csv, where n is an incrementing
+    integer.
+    raises DSSPException if dssp_results is empty
+    """
+    if not dssp_results:
+        raise DSSPException(pdbid)
+
+    for molec_id, dssp_result in dssp_results:
+        outfname = outdir + os.path.sep + pdbid + '_{}.csv'.format(molec_id)
+        with open(outfname, 'w') as outfile:
+            writer = csv.writer(outfile, dialect='unix',
+                                quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(['resi',
+                             'sstr',
+                             'rasa',
+                             'phi',
+                             'psi'])
+            for row in dssp_result:
+                writer.writerow(row)
+    return
+
+def _process_pdb(outdir, base_url, pdbid):
+    """
+    writes dssp calculations for pdbid, located at base_url, to outdir
+    """
+    workingdir = os.getcwd()
+    with tempfile.TemporaryDirectory(prefix='getPDBdata-{}-'.format(pdbid)) \
+                                     as tempdir:
+        os.chdir(tempdir)
+        dssp_results = []
+        # try getting Structure from .cif file, first. cif is the new
+        # rcsb default, and is the only format available for very large
+        # structures
+        try:
+            cif_reader = Bio.PDB.MMCIFParser(QUIET=True)
+            cif_fname  = _get_pdb_file(base_url, pdbid, 'cif')
+            structure  = cif_reader.get_structure('sid', cif_fname)
+            model      = structure[0]
+        except:
+            # try getting Structure from .pdb file, because .cif failed.
+            # sometimes biopython's cif parser fails (not sure why, maybe
+            # handling ambiguous, missing or altered residues?), but the
+            # pdb parser works, so we try it on 'tough' cases
+            try:
+                pdb_reader = Bio.PDB.PDBParser(QUIET=True)
+                pdb_fname  = _get_pdb_file(base_url, pdbid, 'pdb')
+                structure  = pdb_reader.get_structure('sid', pdb_fname)
+                model      = structure[0]
+            except DownloadException:
+                sys.stderr.write('EXCEPTION: {} download failed\n'.format(
+                                                                        pdbid))
+                os.chdir(workingdir)
+                return
+            except:
+                sys.sdterr.write('EXCEPTION: {} structure failed\n'.format(
+                                                                        pdbid))
+                os.chdir(workingdir)
+                return
+        # try getting dssp results for structure
+        try:
+            # split structure into multiple local .pdb files, one per chain
+            pdb_writer = Bio.PDB.PDBIO()
+            molec_id   = 0
+            for chain in model:
+                # detach and rename chain
+                chain.detach_parent()
+                chain.id = 'A'
+                # create new Structure with detached chain
+                my_strct = Bio.PDB.Structure.Structure('mystr')
+                my_model = Bio.PDB.Model.Model('mymod')
+                my_model.add(chain)
+                my_strct.add(my_model)
+                # write Structure as .pdb file, for dssp
+                molec_id += 1
+                pdb_fname = 'sid-{}.pdb'.format(molec_id)
+                pdb_writer.set_structure(my_strct)
+                pdb_writer.save(pdb_fname)
+                try:
+                    my_dssp_results = []
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore')
+                        dssp = Bio.PDB.DSSP(my_model, pdb_fname,
+                                            acc_array='Wilke')
+                    for k in dssp.keys():
+                        residu = dssp[k][1].upper()
+                        secstr = dssp[k][2].upper()
+                        # hack to fix 'NA' entries for rasa values in dssp
+                        # assume (rare) missing and non-standard amino acids
+                        # are burried?
+                        if dssp[k][3] == 'NA':
+                            relasa = 0.0
+                        else:
+                            relasa = round(float(dssp[k][3]), 5)
+                        phiang = round(float(dssp[k][4]), 5)
+                        psiang = round(float(dssp[k][5]), 5)
+                        my_dssp_results.append([residu, secstr, relasa,
+                                                phiang, psiang])
+                    dssp_results.append([molec_id, my_dssp_results])
+                except:
+                    pass # we'll handle dssp failures when we try to write
+            # write dssp results files
+            os.chdir(workingdir)
+            _write_dssps(outdir, pdbid, dssp_results)
+        except DSSPException:
+            sys.stderr.write('EXCEPTION: {} dssp failed\n'.format(pdbid))
+        except:
+            sys.stderr.write('EXCEPTION: {} failed\n'.format(pdbid))
+        finally:
+            os.chdir(workingdir)
+            return
+
+def _fix_url(url):
+    """removes trailing / from URL"""
+    if url[-1] == '/':
+        return url[:-1]
+    return url
+
+# END HELPER FUNCTIONS
+################################################################################
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+    # parse command-line arguments
+    parser = argparse.ArgumentParser(
+                      description='infers structural information across PDB',
+                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # general options
+    parser.add_argument('--version', action='version', version=__version__)
+    parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                        dest='verbose',
+                        help='show runtime information on stdout',
+                        metavar='y|n')
+    parser.add_argument('-t', '--threads', type=int, dest='threads',
+                        help='set number of execution threads (0 to use all)',
+                        metavar='N')
+    parser.add_argument('-o', '--outdir', dest='outdir',
+                        help='set output directory',
+                        metavar='DIR', required=True)
+    parser.add_argument('--pdbqueryurl', dest='pdb_query_url',
+                        help='set the URL for PDB queries',
+                        metavar='URL')
+    parser.add_argument('--pdbfileurl', dest='pdb_sfile_url',
+                        help='set the URL for PDB file download',
+                        metavar='URL')
+    parser.add_argument('--exclude', dest='pdb_exclude_f',
+                        help='set filename for pdb ids to exclude',
+                        metavar='FILE')
+    # set defaults
+    parser.set_defaults(verbose=True,
+                        threads=0,
+                        outdir=None,
+                        pdb_query_url=PDB_QUERY_URL,
+                        pdb_sfile_url=PDB_SFILE_URL,
+                        pdb_exclude_f=None)
+    # parse command-line arguments
+    args = parser.parse_args()
+    if args.threads <= 0:
+        args.threads = multiprocessing.cpu_count()
+    args.pdb_query_url = _fix_url(args.pdb_query_url)
+    args.pdb_sfile_url = _fix_url(args.pdb_sfile_url)
+    args.outdir        = _fix_url(args.outdir)
+
+    # get list of all PDB ids
+    pdb_ids = _get_pdb_ids(args.pdb_query_url)
+    if args.verbose:
+        print('found {} IDs in current PDB'.format(len(pdb_ids)))
+
+    # set up output directory
+    if not os.path.isdir(args.outdir):
+        os.makedirs(args.outdir)
+
+    # filter list of pdb_ids by ids already processed
+    done_pdb_ids = set([])
+    for f in glob.iglob(args.outdir + os.path.sep + '*_*.csv'):
+        done_pdb_ids.add(f.split(os.path.sep)[-1].split('_')[0])
+    filtered_pdb_ids = list(set(pdb_ids) - done_pdb_ids)
+
+    # optionally, filter list of pdb_ids by exclude file
+    if args.pdb_exclude_f:
+        exclude_pdb_ids = set([])
+        with open(args.pdb_exclude_f, 'r') as handle:
+            for line in handle:
+                exclude_pdb_ids.add(line.strip())
+        filtered_pdb_ids = list(set(filtered_pdb_ids) - exclude_pdb_ids)
+        if args.verbose:
+            print('excluding {}'.format(len(exclude_pdb_ids)))
+
+    filtered_pdb_ids.sort()
+
+    if args.verbose:
+        print('have {} completed; need {}'.format(len(done_pdb_ids),
+                                                  len(filtered_pdb_ids)))
+
+    # write structural information files
+    with multiprocessing.Pool(args.threads) as threadpool:
+        targetfn = functools.partial(_process_pdb, args.outdir,
+                                                   args.pdb_sfile_url)
+        threadpool.map(targetfn, filtered_pdb_ids,
+                       chunksize=min(1,len(filtered_pdb_ids)//args.threads))
+
+    if args.verbose:
+        print('finished.')
+
+# END MAIN
+################################################################################
