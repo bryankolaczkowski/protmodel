@@ -88,12 +88,14 @@ class DataWriter(multiprocessing.Process):
         asa = relative solvent-accessible surface areas: numpy array (float)
         phi = phi angles: numpy array (float)
         psi = psi angles: numpy array (float)
+        cas = alpha-carbon pairwise distances: ravelled numpy array (float)
         """
         aas_arr = []
         ssr_arr = []
         asa_arr = []
         phi_arr = []
         psi_arr = []
+        cas_arr = []
         with open(infname, 'r') as handle:
             reader = csv.reader(handle, dialect='unix')
             reader.__next__() # skip single file header
@@ -103,13 +105,15 @@ class DataWriter(multiprocessing.Process):
                 asa_arr.append(float(row[2]))
                 phi_arr.append(float(row[3]))
                 psi_arr.append(float(row[4]))
+                cas_arr.append([ float(x) for x in row[5:] ])
         pid = infname.split(os.path.sep)[-1].split(self.INF_EXTENSION)[0]
         aas = np.array(aas_arr).ravel()
         ssr = np.array(ssr_arr)
         asa = np.array(asa_arr)
         phi = np.array(phi_arr)
         psi = np.array(psi_arr)
-        return (pid, aas, ssr, asa, phi, psi)
+        cas = np.array(cas_arr).ravel()
+        return (pid, aas, ssr, asa, phi, psi, cas)
 
     def _float_features(self, value):
         """return tensorflow list of floats from numpy list of floats"""
@@ -131,7 +135,7 @@ class DataWriter(multiprocessing.Process):
     def _write_data_to_file(self, infilename, outfile):
         """writes data from infilename to outfile"""
         # generate serializable objects from the input file
-        pid, aas, ssr, asa, phi, psi = self._get_ser_data(infilename)
+        pid, aas, ssr, asa, phi, psi, cas = self._get_ser_data(infilename)
         # generate data feature structure
         data = {
           'identifier'              : self._bytes_feature(pid),
@@ -140,6 +144,7 @@ class DataWriter(multiprocessing.Process):
           'solvent_accessible_areas': self._float_features(asa),
           'phi_angles'              : self._float_features(phi),
           'psi_angles'              : self._float_features(psi),
+          'alpha_carbon_distances'  : self._float_features(cas),
         }
         # write data feature
         out_feat = tf.train.Example(features=tf.train.Features(feature=data))

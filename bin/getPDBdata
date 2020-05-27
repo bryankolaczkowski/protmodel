@@ -33,6 +33,8 @@ import re
 import requests
 import Bio.PDB
 
+import numpy as np
+
 from prot3d._version import __version__
 
 ################################################################################
@@ -132,15 +134,28 @@ def _write_dssps(outdir, pdbid, dssp_results):
                              'sstr',
                              'rasa',
                              'phi',
-                             'psi'])
+                             'psi',
+                             'cadistances'])
             for row in dssp_result:
                 writer.writerow(row)
     return
+
+def _get_pairwise_dists(aa_residues):
+    """returns a matrix of pairwise euclidean distances between coordinates"""
+    dst_mat = []
+    for coord1 in aa_residues:
+        dst_arr = []
+        for coord2 in aa_residues:
+            dst = round(np.linalg.norm(np.array(coord1) - np.array(coord2)), 5)
+            dst_arr.append(dst)
+        dst_mat.append(dst_arr)
+    return dst_mat
 
 def _process_pdb(outdir, base_url, pdbid):
     """
     writes dssp calculations for pdbid, located at base_url, to outdir
     """
+    CAID = 'CA' # alpha carbon atom identifier
     workingdir = os.getcwd()
     with tempfile.TemporaryDirectory(prefix='getPDBdata-{}-'.format(pdbid)) \
                                      as tempdir:
@@ -188,6 +203,16 @@ def _process_pdb(outdir, base_url, pdbid):
                 my_model = Bio.PDB.Model.Model('mymod')
                 my_model.add(chain)
                 my_strct.add(my_model)
+                # get list of amino-acid residues in structure
+                aa_residues = []
+                for res in my_model.get_residues():
+                    try:
+                        ca_loc = res[CAID].get_coord()
+                        aa_residues.append(ca_loc)
+                    except:
+                        pass
+                # get amino_acid distances
+                aa_distances = _get_pairwise_dists(aa_residues)
                 # write Structure as .pdb file, for dssp
                 molec_id += 1
                 pdb_fname = 'sid-{}.pdb'.format(molec_id)
@@ -199,9 +224,10 @@ def _process_pdb(outdir, base_url, pdbid):
                         warnings.simplefilter('ignore')
                         dssp = Bio.PDB.DSSP(my_model, pdb_fname,
                                             acc_array='Wilke')
+                    residx = 0  # residue index into aa_distances
                     for k in dssp.keys():
-                        residu = dssp[k][1].upper()
-                        secstr = dssp[k][2].upper()
+                        residu = dssp[k][1].upper()  # residue 1-letter code
+                        secstr = dssp[k][2].upper()  # secondary struc code
                         # hack to fix 'NA' entries for rasa values in dssp
                         # assume (rare) missing and non-standard amino acids
                         # are burried?
@@ -211,8 +237,14 @@ def _process_pdb(outdir, base_url, pdbid):
                             relasa = round(float(dssp[k][3]), 5)
                         phiang = round(float(dssp[k][4]), 5)
                         psiang = round(float(dssp[k][5]), 5)
-                        my_dssp_results.append([residu, secstr, relasa,
-                                                phiang, psiang])
+                        my_res_arr = [residu,
+                                      secstr,
+                                      relasa,
+                                      phiang,
+                                      psiang]
+                        my_res_arr.extend(aa_distances[residx])
+                        my_dssp_results.append(my_res_arr)
+                        residx += 1
                     dssp_results.append([molec_id, my_dssp_results])
                 except:
                     pass # we'll handle dssp failures when we try to write
