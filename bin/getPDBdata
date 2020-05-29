@@ -153,16 +153,6 @@ def _get_pairwise_dists(aa_residues):
         dst_mat.append(dst_arr)
     return dst_mat
 
-    """
-    for coord1 in aa_residues:
-        dst_arr = []
-        for coord2 in aa_residues:
-            dst = round(np.linalg.norm(np.array(coord1) - np.array(coord2)), 5)
-            dst_arr.append(dst)
-        dst_mat.append(dst_arr)
-    return dst_mat
-    """
-
 def _process_pdb(outdir, base_url, pdbid):
     """
     writes dssp calculations for pdbid, located at base_url, to outdir
