@@ -105,7 +105,8 @@ class DataWriter(multiprocessing.Process):
                 asa_arr.append(float(row[2]))
                 phi_arr.append(float(row[3]))
                 psi_arr.append(float(row[4]))
-                cas_arr.append([ float(x) for x in row[5:] ])
+                if len(row) > 5:
+                    cas_arr.append([ float(x) for x in row[5:] ])
         pid = infname.split(os.path.sep)[-1].split(self.INF_EXTENSION)[0]
         aas = np.array(aas_arr).ravel()
         ssr = np.array(ssr_arr)
