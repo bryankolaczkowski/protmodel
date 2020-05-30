@@ -58,7 +58,7 @@ class DataWriter(multiprocessing.Process):
     """writes amino-acid data to files"""
     FILE_PREFIX    = 'd'    # prefix files with this
     FILE_EXTENSION = '.tfr' # suffix files with this
-    FILE_BATCHSIZE = 10000  # write approximately this many records per file
+    FILE_BATCHSIZE = 1000   # write approximately this many records per file
     INF_EXTENSION  = '.csv' # input file name extension
 
     def __init__(self, processid, grouplist, indir, outdir, aamap):
@@ -106,7 +106,7 @@ class DataWriter(multiprocessing.Process):
                 phi_arr.append(float(row[3]))
                 psi_arr.append(float(row[4]))
                 if len(row) > 5:
-                    cas_arr.append([ float(x) for x in row[5:] ])
+                    cas_arr.extend([ float(x) for x in row[5:] ])
         pid = infname.split(os.path.sep)[-1].split(self.INF_EXTENSION)[0]
         aas = np.array(aas_arr).ravel()
         ssr = np.array(ssr_arr)
