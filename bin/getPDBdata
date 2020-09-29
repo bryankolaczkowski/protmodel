@@ -24,16 +24,17 @@ import functools
 import tempfile
 import argparse
 import warnings
+import traceback
 import time
 import glob
 import csv
 import io
 import re
 
+import numpy
 import requests
 import Bio.PDB
-
-import numpy as np
+import Bio.PDB.Polypeptide
 
 from prot3d._version import __version__
 
@@ -42,6 +43,8 @@ from prot3d._version import __version__
 
 PDB_QUERY_URL = 'https://www.rcsb.org/pdb/rest/customReport'
 PDB_SFILE_URL = 'https://files.rcsb.org/download'
+SHORTEST_POLYPEPTIDE = 20   # shortest allowable polypeptide
+ROUND = 4   # number of decimal places to round numbers to
 
 # END DEFINE DEFAULTS
 ################################################################################
@@ -49,15 +52,33 @@ PDB_SFILE_URL = 'https://files.rcsb.org/download'
 # BEG CLASS DEFINITIONS
 
 class DownloadException(Exception):
-    pass
+  pass
+
+class StructureException(Exception):
+  pass
 
 class DSSPException(Exception):
-    pass
+  pass
+
+class FixDisordered(Bio.PDB.Select):
+  def accept_atom(self, atom):
+    # keep only disordered atoms with the 'A' altloc identifier
+    if (not atom.is_disordered()) or atom.get_altloc() == 'A':
+      atom.set_altloc(' ')  # Eliminate alt location ID before output.
+      return True
+    else:
+      return False
 
 # END CLASS DEFINITIONS
 ################################################################################
 ################################################################################
 # BEG HELPER FUNCTIONS
+
+def _fix_url(url):
+    """removes trailing / from URL"""
+    if url[-1] == '/':
+        return url[:-1]
+    return url
 
 def _get_pdb_ids(request_url):
     """
@@ -90,182 +111,170 @@ def _get_pdb_ids(request_url):
     filtered_ids.sort()
     return filtered_ids
 
-def _get_pdb_file(base_url, pdbid, fname_extension):
-    """
-    Returns the name of a local structure file for the given pdbid and base_url
-    fname_extension should be 'cif' or 'pdb'
-    raises DownloadException on error
-    """
-    outfname = 'structure.{}'.format(fname_extension)
-    full_url  = '{}/{}.{}'.format(base_url, pdbid.upper(), fname_extension)
-    max_tries = 100
-    tries     = 0
-    while tries < max_tries:
-        try:
-            tries += 1
-            # get structure from full_url
-            result = requests.get(full_url, timeout=10)
-            # check result is okay
-            result.raise_for_status()
-            # write local structure file
-            with open(outfname, 'w') as outfile:
-                outfile.write(result.text)
-            return outfname
-        except:
-            pass
-    raise DownloadException(pdbid)
+def _get_pdb_text(base_url, pdbid, fname_extension):
+  """
+  Returns the structural text for the given pdbid and base_url
+  fname_extension should be 'cif' or 'pdb'
+  raises DownloadException on error
+  """
+  outfname = 'structure.{}'.format(fname_extension)
+  full_url  = '{}/{}.{}'.format(base_url, pdbid.upper(), fname_extension)
+  max_tries = 100
+  tries     = 0
+  while tries < max_tries:
+      try:
+          tries += 1
+          # get structure from full_url
+          result = requests.get(full_url, timeout=10)
+          # check result is okay
+          result.raise_for_status()
+          # return text for structure
+          return result.text
+      except:
+          pass
+  raise DownloadException(pdbid)
 
-def _write_dssps(outdir, pdbid, dssp_results):
-    """
-    writes dssp results to a series of files in outdir
-    file names will look like outdir/pdbid_n.csv, where n is an incrementing
-    integer.
-    raises DSSPException if dssp_results is empty
-    """
-    if not dssp_results:
-        raise DSSPException(pdbid)
+def _get_model(base_url, pdbid, fname_extension):
+  # set up parser based on fname_extension
+  if fname_extension == 'cif':
+    reader = Bio.PDB.MMCIFParser(QUIET=True)
+  elif fname_extension == 'pdb':
+    reader = Bio.PDB.PDBParser(QUIET=True)
+  else:
+    return None
+  # write structure text into temporary file and parse it
+  tmpstrfname = 'structure_download_temp.txt'
+  with open(tmpstrfname, 'w') as outf:
+    outf.write(_get_pdb_text(base_url, pdbid, fname_extension))
+  structure = reader.get_structure('sid', tmpstrfname)
+  # return first model in the structure
+  return structure[0]
 
-    for molec_id, dssp_result in dssp_results:
-        outfname = outdir + os.path.sep + pdbid + '_{}.csv'.format(molec_id)
-        with open(outfname, 'w') as outfile:
-            writer = csv.writer(outfile, dialect='unix',
-                                quoting=csv.QUOTE_MINIMAL)
-            writer.writerow(['resi',
-                             'sstr',
-                             'rasa',
-                             'phi',
-                             'psi',
-                             'cadistances'])
-            for row in dssp_result:
-                writer.writerow(row)
-    return
+def _get_polypeptides(base_url, pdbid):
+  """
+  Returns a list of polypeptides for the given pdbid and base_url
+  """
+  # try cif reader first
+  try:
+    str_model = _get_model(base_url, pdbid, 'cif')
+  except:
+    # try pdb reader if cif reader fails
+    str_model = _get_model(base_url, pdbid, 'pdb')
+  ppb = Bio.PDB.PPBuilder()
+  return ppb.build_peptides(str_model)
 
+def _get_dssp(model, fname):
+  results = []
+  with warnings.catch_warnings():
+    warnings.simplefilter('ignore')
+    dssp = Bio.PDB.DSSP(model, fname, acc_array='Wilke')
+    for k in dssp.keys():
+      residu = dssp[k][1].upper()  # residue 1-letter code
+      secstr = dssp[k][2].upper()  # secondary struc code
+      # hack to fix 'NA' entries for rasa values in dssp
+      # assume (rare) missing and non-standard amino acids
+      # are burried?
+      if dssp[k][3] == 'NA':
+        relasa = 0.0
+      else:
+        relasa = round(float(dssp[k][3]), ROUND)
+      phiang = round(float(dssp[k][4]), ROUND)
+      psiang = round(float(dssp[k][5]), ROUND)
+      results.append([residu, secstr, relasa, phiang, psiang])
+  return results
+
+"""
 def _get_pairwise_dists(aa_residues):
-    """returns a matrix of pairwise euclidean distances between coordinates"""
-    dst_mat = []
-    for i in range(len(aa_residues)):
-        coord1  = aa_residues[i]
-        dst_arr = []
-        for j in range(i):
-            coord2 = aa_residues[j]
-            dst = round(np.linalg.norm(np.array(coord1) - np.array(coord2)), 5)
-            dst_arr.append(dst)
-        dst_mat.append(dst_arr)
-    return dst_mat
+  dst_mat = []
+  for i in range(len(aa_residues)):
+    crd1  = aa_residues[i]
+    dst_arr = []
+    for j in range(i):
+      crd2 = aa_residues[j]
+      dst = round(numpy.linalg.norm(numpy.array(crd1)-numpy.array(crd2)), ROUND)
+      dst_arr.append(dst)
+    dst_mat.append(dst_arr)
+  return dst_mat
 
-def _process_pdb(outdir, base_url, pdbid):
-    """
-    writes dssp calculations for pdbid, located at base_url, to outdir
-    """
-    CAID = 'CA' # alpha carbon atom identifier
-    workingdir = os.getcwd()
-    with tempfile.TemporaryDirectory(prefix='getPDBdata-{}-'.format(pdbid)) \
-                                     as tempdir:
-        os.chdir(tempdir)
-        dssp_results = []
-        # try getting Structure from .cif file, first. cif is the new
-        # rcsb default, and is the only format available for very large
-        # structures
-        try:
-            cif_reader = Bio.PDB.MMCIFParser(QUIET=True)
-            cif_fname  = _get_pdb_file(base_url, pdbid, 'cif')
-            structure  = cif_reader.get_structure('sid', cif_fname)
-            model      = structure[0]
-        except:
-            # try getting Structure from .pdb file, because .cif failed.
-            # sometimes biopython's cif parser fails (not sure why, maybe
-            # handling ambiguous, missing or altered residues?), but the
-            # pdb parser works, so we try it on 'tough' cases
-            try:
-                pdb_reader = Bio.PDB.PDBParser(QUIET=True)
-                pdb_fname  = _get_pdb_file(base_url, pdbid, 'pdb')
-                structure  = pdb_reader.get_structure('sid', pdb_fname)
-                model      = structure[0]
-            except DownloadException:
-                sys.stderr.write('EXCEPTION: {} download failed\n'.format(
-                                                                        pdbid))
-                os.chdir(workingdir)
-                return
-            except:
-                sys.sdterr.write('EXCEPTION: {} structure failed\n'.format(
-                                                                        pdbid))
-                os.chdir(workingdir)
-                return
-        # try getting dssp results for structure
-        try:
-            # split structure into multiple local .pdb files, one per chain
-            pdb_writer = Bio.PDB.PDBIO()
-            molec_id   = 0
-            for chain in model:
-                # detach and rename chain
-                chain.detach_parent()
-                chain.id = 'A'
-                # create new Structure with detached chain
-                my_strct = Bio.PDB.Structure.Structure('mystr')
-                my_model = Bio.PDB.Model.Model('mymod')
-                my_model.add(chain)
-                my_strct.add(my_model)
-                # get list of amino-acid residues in structure
-                aa_residues = []
-                for res in my_model.get_residues():
-                    try:
-                        ca_loc = res[CAID].get_coord()
-                        aa_residues.append(ca_loc)
-                    except:
-                        pass
-                # get amino_acid distances
-                aa_distances = _get_pairwise_dists(aa_residues)
-                # write Structure as .pdb file, for dssp
-                molec_id += 1
-                pdb_fname = 'sid-{}.pdb'.format(molec_id)
-                pdb_writer.set_structure(my_strct)
-                pdb_writer.save(pdb_fname)
-                try:
-                    my_dssp_results = []
-                    with warnings.catch_warnings():
-                        warnings.simplefilter('ignore')
-                        dssp = Bio.PDB.DSSP(my_model, pdb_fname,
-                                            acc_array='Wilke')
-                    residx = 0  # residue index into aa_distances
-                    for k in dssp.keys():
-                        residu = dssp[k][1].upper()  # residue 1-letter code
-                        secstr = dssp[k][2].upper()  # secondary struc code
-                        # hack to fix 'NA' entries for rasa values in dssp
-                        # assume (rare) missing and non-standard amino acids
-                        # are burried?
-                        if dssp[k][3] == 'NA':
-                            relasa = 0.0
-                        else:
-                            relasa = round(float(dssp[k][3]), 5)
-                        phiang = round(float(dssp[k][4]), 5)
-                        psiang = round(float(dssp[k][5]), 5)
-                        my_res_arr = [residu,
-                                      secstr,
-                                      relasa,
-                                      phiang,
-                                      psiang]
-                        my_res_arr.extend(aa_distances[residx])
-                        my_dssp_results.append(my_res_arr)
-                        residx += 1
-                    dssp_results.append([molec_id, my_dssp_results])
-                except:
-                    pass # we'll handle dssp failures when we try to write
-            # write dssp results files
-            os.chdir(workingdir)
-            _write_dssps(outdir, pdbid, dssp_results)
-        except DSSPException:
-            sys.stderr.write('EXCEPTION: {} dssp failed\n'.format(pdbid))
-        except:
-            sys.stderr.write('EXCEPTION: {} failed\n'.format(pdbid))
-        finally:
-            os.chdir(workingdir)
-            return
+def _get_dist(fname):
+  reader    = Bio.PDB.PDBParser(QUIET=True)
+  structure = reader.get_structure('sid', fname)
+  model     = structure[0]
+  # get location of each Cb (or Ca for GLY) atom,
+  # for each residue in the structural model
+  # assumes single-model, single-chain, single-peptide structure
+  res_locs  = []
+  for res in model.get_residues():
+    try:
+      ca_loc = res['CB'].get_coord()
+    except:
+      ca_loc = res['CA'].get_coord()
+    res_locs.append(ca_loc)
+  return _get_pairwise_dists(res_locs)
+"""
 
-def _fix_url(url):
-    """removes trailing / from URL"""
-    if url[-1] == '/':
-        return url[:-1]
-    return url
+def _process_pdb(base_url, pdbid):
+  results = []
+  # get polypeptides for this structure
+  polypeptides = _get_polypeptides(base_url, pdbid)
+  if len(polypeptides) < 1:
+    raise StructureException('ERRR: {} has no polypeptides'.format(pdbid))
+  # setup for writing each polypeptide as its own pdb file
+  pdb_writer = Bio.PDB.PDBIO()
+  model_id = 1
+  for polyp in polypeptides:
+    if len(polyp) < SHORTEST_POLYPEPTIDE:
+      continue
+    try:
+      # build chain
+      my_chain = Bio.PDB.Chain.Chain('A')
+      for r in polyp:
+        my_chain.add(r)
+      # build model
+      my_model = Bio.PDB.Model.Model(model_id)
+      my_model.add(my_chain)
+      # build structure
+      my_structure = Bio.PDB.Structure.Structure(pdbid)
+      my_structure.add(my_model)
+      # write pdb file
+      pdb_fname = '{}_{}.pdb'.format(pdbid, model_id)
+      pdb_writer.set_structure(my_structure)
+      pdb_writer.save(pdb_fname, select=FixDisordered())
+      # get dssp results
+      dssp_results = _get_dssp(my_model, pdb_fname)
+      # get residue-residue distances
+      #dist_results = _get_dist(pdb_fname)
+      # append to results
+      #if len(dssp_results) != len(dist_results):
+      #  raise StructureException('dssp and distances have different sizes')
+      results.append((pdbid, model_id, dssp_results))
+      model_id += 1
+    except Exception as e:
+      sys.stderr.write('ERRR: {} {} failed\n'.format(pdbid, model_id))
+      traceback.print_exc()
+  return results
+
+def runPDB(outdir, url_base, pdbid):
+  workingdir = os.getcwd()
+  with tempfile.TemporaryDirectory(prefix='getPDBdata-{}-'.format(pdbid)) \
+                                   as tempdir:
+    os.chdir(tempdir)
+    try:
+      for id1,id2,dssps in _process_pdb(url_base, pdbid):
+        with open(outdir + os.path.sep + '{}_{}.csv'.format(id1,id2),
+                  'w') as outf:
+          writer = csv.writer(outf, dialect='unix', quoting=csv.QUOTE_MINIMAL)
+          writer.writerow(['resi',
+                           'sstr',
+                           'rasa',
+                           'phi',
+                           'psi'])
+          for row in dssps:
+            writer.writerow(row)
+    except Exception as e:
+      traceback.print_exc()
+    finally:
+      os.chdir(workingdir)
 
 # END HELPER FUNCTIONS
 ################################################################################
@@ -311,7 +320,7 @@ if __name__ == '__main__':
         args.threads = multiprocessing.cpu_count()
     args.pdb_query_url = _fix_url(args.pdb_query_url)
     args.pdb_sfile_url = _fix_url(args.pdb_sfile_url)
-    args.outdir        = _fix_url(args.outdir)
+    args.outdir        = os.path.abspath(_fix_url(args.outdir))
 
     # get list of all PDB ids
     pdb_ids = _get_pdb_ids(args.pdb_query_url)
@@ -346,8 +355,7 @@ if __name__ == '__main__':
 
     # write structural information files
     with multiprocessing.Pool(args.threads) as threadpool:
-        targetfn = functools.partial(_process_pdb, args.outdir,
-                                                   args.pdb_sfile_url)
+        targetfn = functools.partial(runPDB, args.outdir, args.pdb_sfile_url)
         threadpool.map(targetfn, filtered_pdb_ids,
                        chunksize=min(1,len(filtered_pdb_ids)//args.threads))
 
