@@ -25,5 +25,7 @@ OUTDIR=../data
 # NOTE: this will take a moment
 ./splitPDBdata -c ${OUTDIR}/clusters.csv -o ${OUTDIR}/tvtsplit.txt > ${OUTDIR}/tvtsplit.log
 
-
+# 4. calculate frequencies of each secondary structure in the training data
+# NOTE: this will take a few minutes
+./calcTrainWts -f ${OUTDIR}/tvtsplit.txt -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/tvtsplit.trainwts.txt
 
