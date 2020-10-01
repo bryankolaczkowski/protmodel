@@ -96,7 +96,6 @@ if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='clustPDBdata-') as tempdir:
         os.chdir(tempdir)
 
-
         if args.verbose:
             sys.stdout.write('writing fasta file...')
             sys.stdout.flush()
@@ -113,19 +112,14 @@ if __name__ == '__main__':
         if args.verbose:
             mmseqs_redirect = ''
 
-        # create mmseqs database
-        cmd = 'mmseqs createdb {} DB {}'.format(fasta_fname, mmseqs_redirect)
-        os.system(cmd)
-
-        # cluster sequences
-        cmd = 'mmseqs linclust DB DB_clu tmp --min-seq-id {} {}'.format(
-                                            args.seqidentity, mmseqs_redirect)
-        os.system(cmd)
-
-        # create tab-separated cluster file
-        cluster_fname = 'clusters.tsv'
-        cmd = 'mmseqs createtsv DB DB DB_clu {} {}'.format(cluster_fname,
-                                                           mmseqs_redirect)
+        # iterative clustering using mmseqs2
+        mmseqs_options = '--min-seq_id {} --single-step-clustering'.format(
+                                                          args.seqidentity)
+        cmd = 'mmseqs easy-cluster {} clst ./ {} {}'.format(fasta_fname,
+                                                            mmseqs_options,
+                                                            mmseqs_redirect)
+        # tab-separated cluster file
+        cluster_fname = 'clst_cluster.tsv'
         os.system(cmd)
 
         if args.verbose:
@@ -147,8 +141,7 @@ if __name__ == '__main__':
 
     # convert clusters to .csv
     with open(args.outfile, 'w') as outfile:
-        writer = csv.writer(outfile, dialect='unix',
-                            quoting=csv.QUOTE_MINIMAL)
+        writer = csv.writer(outfile, dialect='unix', quoting=csv.QUOTE_MINIMAL)
         for v in clusters.values():
             writer.writerow(v)
 
