@@ -113,7 +113,7 @@ if __name__ == '__main__':
             mmseqs_redirect = ''
 
         # iterative clustering using mmseqs2
-        mmseqs_options = '--min-seq_id {} --single-step-clustering'.format(
+        mmseqs_options = '--min-seq-id {} --single-step-clustering'.format(
                                                           args.seqidentity)
         cmd = 'mmseqs easy-cluster {} clst ./ {} {}'.format(fasta_fname,
                                                             mmseqs_options,
