@@ -20,14 +20,13 @@ sys.path.append(libpath)
 
 import distutils.util
 import argparse
-import math
 
 from prot3d._version import __version__
 
 ################################################################################
 # BEG CLASS DEFINITIONS
 
-class IDReadException(exception):
+class IDReadException(Exception):
   pass
 
 # END CLASS DEFINITIONS
@@ -71,8 +70,7 @@ def _calc_wts(tvtfname, datadir, outfname, verbose):
     sys.stdout.write('  done.\n')
   # get counts for each secondary structure type
   if verbose:
-    sys.stdout.write('  counting secondary structure assignments...')
-    sys.stdout.flush()
+    sys.stdout.write('  counting secondary structure assignments...\n')
   ss_counts = {}
   for id in train_data_ids:
     _count_ss(id, datadir, ss_counts)
@@ -82,12 +80,12 @@ def _calc_wts(tvtfname, datadir, outfname, verbose):
     total_count += v
   ids = list(ss_counts.keys())
   ids.sort()
-  with open(outf, 'w') as outf
+  with open(outfname, 'w') as outf:
     for id in ids:
       freq = ss_counts[id] / total_count
-      outf.write('{},{:.5f}\n'.format(id,math.round(freq,5)))
+      outf.write('{},{:.5f}\n'.format(id,round(freq,5)))
       if verbose:
-        sys.stdout.write('    {} {.4f} {}/{}\n'.format(id,
+        sys.stdout.write('    {} {:.4f} {}/{}\n'.format(id,
                                                        freq,
                                                        ss_counts[id],
                                                        total_count))
@@ -128,7 +126,7 @@ if __name__ == '__main__':
   # parse command-line arguments
   args = parser.parse_args()
 
-  args.datadir = _fix_dir(args.datadir)
+  args.datadir = _fix_dirname(args.datadir)
 
   if args.verbose:
     sys.stdout.write('calculating secondary structure weights...\n')
