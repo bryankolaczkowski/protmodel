@@ -37,6 +37,8 @@ DEFINDX   = 0     # default index into uncompleted results to run next
 ################################################################################
 # BEG CLASS DEFINITIONS
 
+class PSIBException(Exception):
+  pass
 
 # END CLASS DEFINITIONS
 ################################################################################
@@ -78,7 +80,11 @@ def runEvoWts(infname, outdir, evalue, verbose):
                                                                   psib_opts1,
                                                                   psib_opts2,
                                                                   psib_opts3)
-    os.system(cmd)
+    status = os.system(cmd)
+    if status != 0:
+      sys.stderr.write('ERROR: psi-blast failed\n')
+      os.chdir(cwd)
+      raise PSIBException(infname)
     if verbose:
       sys.stdout.write('done.\n')
       sys.stdout.write('parsing pssm...')
