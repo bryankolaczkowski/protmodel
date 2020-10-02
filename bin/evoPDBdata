@@ -53,6 +53,9 @@ def runEvoWts(infname, outdir, evalue, verbose):
   with tempfile.TemporaryDirectory(prefix='evowts-') as tmpdir:
     cwd = os.getcwd()
     os.chdir(tmpdir)
+    if verbose:
+      sys.stdout.write('converting to fasta...')
+      sys.stdout.flush()
     # convert infname to fasta formatted sequence
     fastaf = 'query.fasta'
     with open(fastaf, 'w') as outf:
@@ -62,6 +65,10 @@ def runEvoWts(infname, outdir, evalue, verbose):
         for line in handle:
           outf.write(line.split(',')[0])
         outf.write('\n')
+    if verbose:
+      sys.stdout.write('done.\n')
+      sys.stdout.write('running psiblast...')
+      sys.stdout.flush()
     # execute psi-blast to get pssm
     pssmf = 'pssm.out'
     psib_opts1 = '-outfmt 6 -max_target_seqs 1000000 -evalue {}'.format(evalue)
@@ -72,6 +79,10 @@ def runEvoWts(infname, outdir, evalue, verbose):
                                                                   psib_opts2,
                                                                   psib_opts3)
     os.system(cmd)
+    if verbose:
+      sys.stdout.write('done.\n')
+      sys.stdout.write('parsing pssm...')
+      sys.stdout.flush()
     # parse pssm to get amino-acid frequencies
     # writing to an output file
     naas = 20
@@ -95,6 +106,8 @@ def runEvoWts(infname, outdir, evalue, verbose):
               outf.write(',{:.4f}'.format(round(aawt),4))
             outf.write('\n')
     os.chdir(cwd)
+    if verbose:
+      sys.stdout.write('done.\n')
   return
 
 # END HELPER FUNCTIONS
@@ -113,7 +126,7 @@ if __name__ == '__main__':
                       dest='verbose',
                       help='show runtime information on stdout',
                       metavar='y|n')
-  parser.add_argument('-f', '--infile', dest='inile',
+  parser.add_argument('-f', '--infile', dest='infile',
                       help='set input file name',
                       metavar='FILE', required=True)
   parser.add_argument('-o', '--outdir', dest='outdir',
