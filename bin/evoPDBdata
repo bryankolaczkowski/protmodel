@@ -29,7 +29,7 @@ from prot3d._version import __version__
 ################################################################################
 # BEG DEFINE DEFAULTS
 
-DEFEVALUE = 0.001 # default e-value cutoff for psi-blast
+DEFEVALUE = 0.005 # default e-value cutoff for psi-blast
 DEFINDX   = 0     # default index into uncompleted results to run next
 
 # END DEFINE DEFAULTS
@@ -69,8 +69,7 @@ def runEvoWts(infname, outdir, evalue, verbose):
         outf.write('\n')
     if verbose:
       sys.stdout.write('done.\n')
-      sys.stdout.write('running psiblast...')
-      sys.stdout.flush()
+      sys.stdout.write('running psiblast...\n')
     # execute psi-blast to get pssm
     pssmf = 'pssm.out'
     psib_opts1 = '-outfmt 6 -max_target_seqs 1000000 -evalue {}'.format(evalue)
@@ -80,6 +79,9 @@ def runEvoWts(infname, outdir, evalue, verbose):
                                                                   psib_opts1,
                                                                   psib_opts2,
                                                                   psib_opts3)
+    if verbose:
+      sys.stdout.write(cmd)
+      sys.stdout.write('\n')  
     status = os.system(cmd)
     if status != 0:
       sys.stderr.write('ERROR: psi-blast failed\n')
