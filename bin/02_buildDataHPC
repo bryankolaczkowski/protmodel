@@ -22,15 +22,15 @@ need_farray=()
 for f1 in ${farray1[@]}; do
   fname=${f1##*/}
   if [ ! -f ${dout}/${fname} ]; then
-    need_farray+=( ${dout}/${fname} )
+    need_farray+=( ${din}/${fname} )
   fi
 done
 
 myfname=${need_farray[$SLURM_ARRAY_TASK_ID]}
 
-echo 'starting ${myfname}'
+echo "starting ${myfname}"
 
-./evoPDBdata -i ${myfname} -o ${dout}
+./evoPDBdata -f ${myfname} -o ${dout}
 
-echo 'DONE.'
+echo "DONE."
 
