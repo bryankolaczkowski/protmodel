@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+
+################################################################################
+# calculates PSSM-based amino-acid frequencies for each sequence position
+# in the pdb data
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import distutils.util
+import argparse
+import tempfile
+import numpy
+
+from prot3d._version import __version__
+
+################################################################################
+# BEG DEFINE DEFAULTS
+
+DEFEVALUE = 0.001 # default e-value cutoff for psi-blast
+DEFINDX   = 0     # default index into uncompleted results to run next
+
+# END DEFINE DEFAULTS
+################################################################################
+################################################################################
+# BEG CLASS DEFINITIONS
+
+
+# END CLASS DEFINITIONS
+################################################################################
+################################################################################
+# BEG HELPER FUNCTIONS
+
+def _fix_dir(dir):
+  """removes trailing / from dir"""
+  if dir[-1] == '/':
+    return dir[:-1]
+  return dir
+
+def runEvoWts(infname, outdir, evalue, verbose):
+  with tempfile.TemporaryDirectory(prefix='evowts-') as tmpdir:
+    cwd = os.getcwd()
+    os.chdir(tmpdir)
+    # convert infname to fasta formatted sequence
+    fastaf = 'query.fasta'
+    with open(fastaf, 'w') as outf:
+      with open(infname, 'r') as handle:
+        handle.readline() # skip header
+        outf.write('>qury1\n') # write fasta header
+        for line in handle:
+          outf.write(line.split(',')[0])
+        outf.write('\n')
+    # execute psi-blast to get pssm
+    pssmf = 'pssm.out'
+    psib_opts1 = '-outfmt 6 -max_target_seqs 1000000 -evalue {}'.format(evalue)
+    psib_opts2 = '-num_iterations 3 -inclusion_ethresh {}'.format(evalue)
+    psib_opts3 = '-save_pssm_after_last_round -out_ascii_pssm {}'.format(pssmf)
+    cmd = 'psiblast -query {} -db nr {} {} {} > /dev/null'.format(fastaf,
+                                                                  psib_opts1,
+                                                                  psib_opts2,
+                                                                  psib_opts3)
+    os.system(cmd)
+    # parse pssm to get amino-acid frequencies
+    # writing to an output file
+    naas = 20
+    outfname = outdir + os.path.sep + os.path.basename(infname)
+    with open(outfname, 'w') as outf:
+      with open(pssmf, 'r') as handle:
+        handle.readline() # blank line
+        handle.readline() # description
+        aacodes = handle.readline().split()[:naas] # amino acid codes
+        outf.write('res,')
+        outf.write(','.join(aacodes))
+        outf.write('\n')
+        for line in handle:
+          linearr = line.split()
+          if len(linearr) > naas*2:
+            aares = linearr[1]
+            aawts = numpy.exp([ float(x) for x in linearr[2:naas+2] ])
+            aawts /= numpy.sum(aawts)
+            outf.write(aares)
+            for aawt in aawts:
+              outf.write(',{:.4f}'.format(round(aawt),4))
+            outf.write('\n')
+    os.chdir(cwd)
+  return
+
+# END HELPER FUNCTIONS
+################################################################################
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+  # parse command-line arguments
+  parser = argparse.ArgumentParser(
+                    description='calculate evolutionary weights for pdb data',
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  # general options
+  parser.add_argument('--version', action='version', version=__version__)
+  parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                      dest='verbose',
+                      help='show runtime information on stdout',
+                      metavar='y|n')
+  parser.add_argument('-f', '--infile', dest='inile',
+                      help='set input file name',
+                      metavar='FILE', required=True)
+  parser.add_argument('-o', '--outdir', dest='outdir',
+                      help='set output directory name',
+                      metavar='DIR', required=True)
+  parser.add_argument('--evalue', type=float, dest='evalue',
+                      help='set e-value cutoff for psi-blast',
+                      metavar='NUM')
+  # set defaults
+  parser.set_defaults(verbose=True,
+                      infile=None,
+                      outdir=None,
+                      evalue=DEFEVALUE)
+  # parse command-line arguments
+  args = parser.parse_args()
+
+  args.infile = os.path.abspath(args.infile)
+
+  args.outdir = os.path.abspath(_fix_dir(args.outdir))
+  if not os.path.exists(args.outdir):
+    os.path.mkdirs(args.outdir)
+
+  if args.verbose:
+    sys.stdout.write('running evo wts for {}\n'.format(args.infile))
+
+  try:
+    runEvoWts(args.infile, args.outdir, args.evalue, args.verbose)
+  except Exception as e:
+    sys.stderr.write('EXCEPTION: {}\n'.format(e))
+    raise(e)
+
+  if args.verbose:
+    sys.stdout.write('finished.\n')
+
+# END MAIN
+################################################################################
