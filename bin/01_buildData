@@ -13,6 +13,10 @@
 # where to put all the data
 OUTDIR=../data
 
+# 0. download UniRef90 mmseqs db
+# NOTE: this will take a day or more
+#mmseqs databases UniRef90 ${OUTDIR}/uniref90 ${OUTDIR}/mmseqs_tmp
+
 # 1. get dssp properties for all current entries in PDB
 # NOTE: this will take a day or more
 #./getPDBdata -o ${OUTDIR}/pdbdata-strctinfo --exclude ${OUTDIR}/exclude_ids.txt
@@ -35,5 +39,23 @@ OUTDIR=../data
 
 # 6. convert fasta file to mmseqs2 query database
 # NOTE: this will take a moment
-mmseqs createdb ${OUTDIR}/pdbdata-strctinfo.fasta ${OUTDIR}/pdbdata-strctinfo.db --createdb-mode 1
+#[[ -d ${OUTDIR}/mmseqsdb ]] || mkdir ${OUTDIR}/mmseqsdb
+#mmseqs createdb ${OUTDIR}/pdbdata-strctinfo.fasta ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db --createdb-mode 1 --shuffle 0
+
+# 7. search pdbdata fasta file against UniRef90 database
+mmseqs search ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/uniref90 ${OUTDIR}/pdb_vs_uniref ${OUTDIR}/mmseqs_tmp -a
+
+# 8. convert UniRef90 search results to profile database
+mmseqs result2profile ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/uniref90 ${OUTDIR}/pdb_vs_uniref ${OUTDIR}/pdb_vs_uniref_profile
+
+# 9. convert UniRef90 profile database to pssms
+mmseqs profile2pssm ${OUTDIR}/pdb_vs_uniref_profile ${OUTDIR}/pdb_vs_uniref_profile.pssm
+
+# 10. parse UniRef90 pssms
+
+
+# 11. clean up mmseqs databases we don't need
+# NOTE: leave the UniRef90 database that took a day or more to download
+# Note: takes a moment
+
 
