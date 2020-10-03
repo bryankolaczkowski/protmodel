@@ -27,5 +27,11 @@ OUTDIR=../data
 
 # 4. calculate frequencies of each secondary structure in the training data
 # NOTE: this will take a few minutes
-./calcTrainWts -f ${OUTDIR}/tvtsplit.txt -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/tvtsplit.trainwts.txt
+#./calcTrainWts -f ${OUTDIR}/tvtsplit.txt -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/tvtsplit.trainwts.txt
+
+# 5. generate fasta file for structure data from pdb
+# NOTE: this will take a few minutes
+./makePDBfasta -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/pdbdata-strctinfo.fasta
+
+
 

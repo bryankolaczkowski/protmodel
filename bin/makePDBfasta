@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+
+################################################################################
+# makes a FASTA file from pdb data files.
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import glob
+import distutils.util
+import argparse
+
+from prot3d._version import __version__
+
+################################################################################
+# BEG CLASS DEFINITIONS
+
+# END CLASS DEFINITIONS
+################################################################################
+################################################################################
+# BEG HELPER FUNCTIONS
+
+def _fix_dirname(dirname):
+  """remove trailing path separater from directory name"""
+  if dirname[-1] == os.path.sep:
+    return dirname[:-1]
+  return dirname
+
+
+def _write_fasta(datadir, outfname, verbose):
+  with open(outfname, 'w') as outf:
+    for f in glob.iglob(datadir + os.path.sep + '*.csv'):
+      id = os.path.basename(f).split('.csv')[0]
+      se = ''
+      with open(f, 'r') as handle:
+        handle.readline() # skip header
+        for line in handle:
+          se += line.split(',')[0]
+      outf.write('>{}\n{}\n'.format(id,se))
+  return
+
+# END HELPER FUNCTIONS
+################################################################################
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+  # parse command-line arguments
+  parser = argparse.ArgumentParser(
+                    description='calc sec str freqs from train data',
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  # general options
+  parser.add_argument('--version', action='version', version=__version__)
+  parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                      dest='verbose',
+                      help='show runtime information on stdout',
+                      metavar='y|n')
+  parser.add_argument('-o', '--outfile', dest='outf',
+                      help='set output file name',
+                      metavar='FILE', required=True)
+  parser.add_argument('-d', '--datadir', dest='datadir',
+                      help='set pdb data directory',
+                      metavar='DIR', required=True)
+  # set defaults
+  parser.set_defaults(verbose=True,
+                      outf=None,
+                      datadir=None)
+  # parse command-line arguments
+  args = parser.parse_args()
+
+  args.datadir = _fix_dirname(args.datadir)
+
+  if args.verbose:
+    sys.stdout.write('making fasta file {}...\n'.format(args.outf))
+  try:
+    _write_fasta(args.datadir, args.outf, args.verbose)
+  except Exception as e:
+    sys.stderr.write('EXCEPTION: {}\n'.format(e))
+    raise(e)
+
+  if args.verbose:
+    sys.stdout.write('finished.\n')
+
+# END MAIN
+################################################################################
