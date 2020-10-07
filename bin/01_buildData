@@ -25,10 +25,16 @@ case ${1} in
   tmp=${OUTDIR}/mmseqs_tmp
   out=${OUTDIR}/uniref90
   [[ -d ${out} ]] || mkdir ${out}
-  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 1
+  mmseqs databases UniRef90 ${out}/uniref90 ${tmp}
+  mmseqs createindex ${out}/uniref90 ${tmp}
   ;;
 
+2)
+  # 2. UniRef90 each-vs-all search to generate profiles
+  #    for each sequence
+  # NOTE: this will take a few days in total
 
+  ;;
 
 
 

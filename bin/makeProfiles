@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+
+################################################################################
+# calculate amino-acid profiles for every sequence in an mmseqs2 database
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import distutils.util
+import tempfile
+import argparse
+import glob
+import csv
+
+from prot3d._version import __version__
+
+################################################################################
+# BEG DEFINE DEFAULTS
+
+DEF_ECUTOFF = 0.005 # e-value cutoff for database search
+DEF_NSPLITS = 1000  # number of database subsets to create
+
+# END DEFINE DEFAULTS
+################################################################################
+################################################################################
+# BEG CLASS DEFINITIONS
+
+# END CLASS DEFINITIONS
+################################################################################
+################################################################################
+# BEG HELPER FUNCTIONS
+
+def buildProfiles(database, outdir, evalue, splits, tmpdir, verbose):
+  # check outdir, create if needed
+  if not os.path.exists(outdir):
+    os.makedirs(outdir)
+  # check database
+  if not os.path.exists(database):
+    sys.stderr.write('ERROR: db {} not found.\n'.format(database))
+    sys.exit(1)
+  # do work in temporary directory with auto-cleanup
+  with tempfile.TemporaryDirectory(prefix='makeProfiles-', dir=tmpdir) as dbdir:
+    # set verbosity for mmseqs - errors+warnings by default, info if verbose
+    vnt = 2
+    if verbose:
+      vnt = 3
+    # split database into splits shards
+    db_shard_basename = dbdir + os.path.sep + 'dbshard'
+    opt = '--split {} -v {}'.format(splits, vnt)
+    cmd = 'mmseqs splitdb {} {} {}'.format(database, db_shard_basename, opt)
+    os.system(cmd)
+    # iterate over database shards
+    for i in range(splits):
+      # only compute results if they don't already exist (for restarts)
+      pssmf = outdir + os.path.sep + 'prof{}_{}.pssm'.format(i, splits)
+      if not os.path.exists(pssmf):
+        # search this shard of the database against the whole
+        mydb  = db_shard_basename + '_' + str(i) + '_' + str(splits)
+        alndb = dbdir + os.path.sep + 'aln_{}_{}'.format(i, splits)
+        opt = '-a 1 -e {} --e-profile {} -v {}'.format(evalue, evalue, vnt)
+        cmd = 'mmseqs search {} {} {} {} {}'.format(mydb,
+                                                    database,
+                                                    alndb,
+                                                    tmpdir,
+                                                    opt)
+        os.system(cmd)
+        # convert search results to profile database
+        pdb = dbdir + os.path.sep + 'prof{}_{}'.format(i, splits)
+        opt = '-e {} --e-profile {} -v {}'.format(evalue, evalue, vnt)
+        cmd = 'mmseqs result2profile {} {} {} {} {}'.format(mydb,
+                                                            database,
+                                                            alndb,
+                                                            pdb,
+                                                            opt)
+        os.system(cmd)
+        # convert profile database to pssm format
+        opt = '-v {}'.format(vnt)
+        cmd = 'mmseqs profile2pssm {} {} {}'.format(pdb, pssmf, opt)
+        os.system(cmd)
+        # clean up results databases; they can be LARGE
+        os.remove(alndb)
+        os.remove(alndb + '.index')
+        os.remove(alndb + '.dbtype')
+        os.remove(pdb)
+        os.remove(pdb + '.index')
+        os.remove(pdb + '.dbtype')
+        if verbose:
+          sys.stdout.write(' {} done {}/{}\n'.format(pssmf, i+1, splits))
+  return
+
+# END HELPER FUNCTIONS
+################################################################################
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+  # parse command-line arguments
+  parser = argparse.ArgumentParser(
+                    description='calculates profiles for a sequence db',
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  # general options
+  parser.add_argument('--version', action='version', version=__version__)
+  parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                      dest='verbose',
+                      help='show runtime information on stdout',
+                      metavar='y|n')
+  parser.add_argument('-d', '--database', dest='database',
+                      help='mmseqs2 database to calculate profiles from',
+                      metavar='DB', required=True)
+  parser.add_argument('-o', '--outdir', dest='outdir',
+                      help='set output directory',
+                      metavar='DIR', required=True)
+  parser.add_argument('--evalue', type=float, dest='evalue',
+                      help='set e-value cutoff for calculating profiles',
+                      metavar='E')
+  parser.add_argument('--split', type=int, dest='nsplits',
+                      help='set number of database subsets to create',
+                      metavar='N')
+  parser.add_argument('--tmp', dest='tmpdir',
+                      help='set path for creating temporary directories',
+                      metavar='DIR')
+  parser.set_defaults(verbose=True,
+                      database=None,
+                      outdir=None,
+                      evalue=DEF_ECUTOFF,
+                      nsplits=DEF_NSPLITS,
+                      tmpdir=None)
+  # parse command-line arguments
+  args = parser.parse_args()
+
+  # set up database, output file, and temporary directory paths
+  args.database = os.path.abspath(os.path.realpath(args.database))
+  args.outdir   = os.path.abspath(os.path.realpath(args.outdir ))
+  if args.tmpdir:
+    args.tmpdir = os.path.abspath(os.path.realpath(args.tmpdir  ))
+
+  if args.verbose:
+    sys.stdout.write('building profiles for db {}\n'.format(args.database))
+
+  buildProfiles(args.database, args.outdir,
+                args.evalue,   args.nsplits,
+                args.tmpdir,   args.verbose)
+
+  if args.verbose:
+    sys.stdout.write('finished.\n')
+
+# END MAIN
+################################################################################
