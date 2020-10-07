@@ -25,7 +25,7 @@ case ${1} in
   tmp=${OUTDIR}/mmseqs_tmp
   out=${OUTDIR}/uniref90
   [[ -d ${out} ]] || mkdir ${out}
-  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 9
+  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 1
   ;;
 
 
