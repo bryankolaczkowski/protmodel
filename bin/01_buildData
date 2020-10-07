@@ -13,13 +13,18 @@
 # where to put all the data
 OUTDIR=../data
 
+## DATABASE DOWNLOAD ..........................................................
+
 # 0. download UniRef90 mmseqs db
 # NOTE: this will take a day or more
-#mmseqs databases UniRef90 ${OUTDIR}/uniref90 ${OUTDIR}/mmseqs_tmp
+#[[ -d ${OUTDIR}/mmseqsdb ]] || mkdir ${OUTDIR}/mmseqsdb
+#mmseqs databases UniRef90 ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqs_tmp
 
 # 1. get dssp properties for all current entries in PDB
 # NOTE: this will take a day or more
 #./getPDBdata -o ${OUTDIR}/pdbdata-strctinfo --exclude ${OUTDIR}/exclude_ids.txt
+
+## TRAIN-VALIDATE-TEST ........................................................
 
 # 2. cluster PDB sequences by sequence identity
 # NOTE: this will take a few minutes
@@ -33,23 +38,25 @@ OUTDIR=../data
 # NOTE: this will take a few minutes
 #./calcTrainWts -f ${OUTDIR}/tvtsplit.txt -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/tvtsplit.trainwts.txt
 
+## EVOLUTIONARY INFORMATION ...................................................
+
 # 5. generate fasta file for structure data from pdb
 # NOTE: this will take a few minutes
 #./makePDBfasta -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/pdbdata-strctinfo.fasta
 
 # 6. convert fasta file to mmseqs2 query database
 # NOTE: this will take a moment
-#[[ -d ${OUTDIR}/mmseqsdb ]] || mkdir ${OUTDIR}/mmseqsdb
 #mmseqs createdb ${OUTDIR}/pdbdata-strctinfo.fasta ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db --createdb-mode 1 --shuffle 0
 
 # 7. search pdbdata fasta file against UniRef90 database
-mmseqs search ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/uniref90 ${OUTDIR}/pdb_vs_uniref ${OUTDIR}/mmseqs_tmp -a
+# NOTE: this will take at least a few days
+mmseqs search ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqsdb/pdb_vs_uniref ${OUTDIR}/mmseqs_tmp -e 0.005 -a
 
 # 8. convert UniRef90 search results to profile database
-mmseqs result2profile ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/uniref90 ${OUTDIR}/pdb_vs_uniref ${OUTDIR}/pdb_vs_uniref_profile
+#mmseqs result2profile ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqsdb/pdb_vs_uniref ${OUTDIR}/mmseqsdb/pdb_vs_uniref_profile
 
 # 9. convert UniRef90 profile database to pssms
-mmseqs profile2pssm ${OUTDIR}/pdb_vs_uniref_profile ${OUTDIR}/pdb_vs_uniref_profile.pssm
+#mmseqs profile2pssm ${OUTDIR}/mmseqsdb/pdb_vs_uniref_profile ${OUTDIR}/pdb_vs_uniref_profile.pssm
 
 # 10. parse UniRef90 pssms
 
