@@ -30,6 +30,7 @@ import glob
 import csv
 import io
 import re
+import bz2
 
 import numpy
 import requests
@@ -261,8 +262,8 @@ def runPDB(outdir, url_base, pdbid):
     os.chdir(tempdir)
     try:
       for id1,id2,dssps in _process_pdb(url_base, pdbid):
-        with open(outdir + os.path.sep + '{}_{}.csv'.format(id1,id2),
-                  'w') as outf:
+        with bz2.open(outdir + os.path.sep + '{}_{}.csv'.format(id1,id2),
+                      mode='wb', compresslevel=9) as outf:
           writer = csv.writer(outf, dialect='unix', quoting=csv.QUOTE_MINIMAL)
           writer.writerow(['resi',
                            'sstr',

@@ -13,12 +13,29 @@
 # where to put all the data
 OUTDIR=../data
 
-## DATABASE DOWNLOAD ..........................................................
+case ${1} in
 
-# 0. download UniRef90 mmseqs db
-# NOTE: this will take a day or more
-#[[ -d ${OUTDIR}/mmseqsdb ]] || mkdir ${OUTDIR}/mmseqsdb
-#mmseqs databases UniRef90 ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqs_tmp
+###############################################################################
+# PART 1: generate amino-acid profiles using UniRef90 database
+
+1)
+  # 1. download UniRef90 mmseqs db
+  # NOTE: this will take a day or more
+  echo "step ${1}: download uniref90 mmseqs2 database"
+  tmp=${OUTDIR}/mmseqs_tmp
+  out=${OUTDIR}/uniref90
+  [[ -d ${out} ]] || mkdir ${out}
+  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 9
+  ;;
+
+
+
+
+
+
+
+
+
 
 # 1. get dssp properties for all current entries in PDB
 # NOTE: this will take a day or more
@@ -50,7 +67,7 @@ OUTDIR=../data
 
 # 7. search pdbdata fasta file against UniRef90 database
 # NOTE: this will take at least a few days
-mmseqs search ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqsdb/pdb_vs_uniref ${OUTDIR}/mmseqs_tmp -e 0.005 -a
+#mmseqs search ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqsdb/pdb_vs_uniref ${OUTDIR}/mmseqs_tmp -e 0.005 -a
 
 # 8. convert UniRef90 search results to profile database
 #mmseqs result2profile ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqsdb/pdb_vs_uniref ${OUTDIR}/mmseqsdb/pdb_vs_uniref_profile
@@ -65,4 +82,10 @@ mmseqs search ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref9
 # NOTE: leave the UniRef90 database that took a day or more to download
 # Note: takes a moment
 
+*)
+  echo "error: unknown or missing command-line option ${1}."
+  ;;
+
+esac
+echo "finished."
 
