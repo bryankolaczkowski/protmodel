@@ -30,7 +30,7 @@ from prot3d._version import __version__
 # BEG DEFINE DEFAULTS
 
 DEF_ECUTOFF = 0.01  # e-value cutoff for database search
-DEF_NSPLITS = 1000  # number of database subsets to create
+DEF_NSPLITS = 100   # number of database subsets to create
 
 # END DEFINE DEFAULTS
 ################################################################################
@@ -41,6 +41,13 @@ DEF_NSPLITS = 1000  # number of database subsets to create
 ################################################################################
 ################################################################################
 # BEG HELPER FUNCTIONS
+
+def _rmdb(dbname):
+  if os.path.exists(dbname):
+    os.remove(dbname)
+  for f in glob.iglob(dbname + '.*'):
+    os.remove(f)
+  return
 
 def buildProfiles(querydb, targetdb, outdir, evalue, splits, tmpdir, verbose):
   # check outdir, create if needed
@@ -72,9 +79,7 @@ def buildProfiles(querydb, targetdb, outdir, evalue, splits, tmpdir, verbose):
       pssmf = outdir + os.path.sep + 'prof{}_{}.pssm'.format(i, splits)
       mydb  = db_shard_basename + '_' + str(i) + '_' + str(splits)
       if os.path.exists(pssmf):
-        os.remove(mydb)
-        os.remove(mydb + '.index')
-        os.remove(mydb + '.dbtype')
+        _rmdb(mydb)
         continue
       # search this shard of the database against the whole
       alndb = dbdir + os.path.sep + 'aln_{}_{}'.format(i, splits)
@@ -99,15 +104,9 @@ def buildProfiles(querydb, targetdb, outdir, evalue, splits, tmpdir, verbose):
       cmd = 'mmseqs profile2pssm {} {} {}'.format(pdb, pssmf, opt)
       os.system(cmd)
       # clean up results and shard databases; they can be LARGE
-      os.remove(alndb)
-      os.remove(alndb + '.index')
-      os.remove(alndb + '.dbtype')
-      os.remove(pdb)
-      os.remove(pdb + '.index')
-      os.remove(pdb + '.dbtype')
-      os.remove(mydb)
-      os.remove(mydb + '.index')
-      os.remove(mydb + '.dbtype')
+      _rmdb(alndb)
+      _rmdb(pdb)
+      _rmdb(mydb)
       if verbose:
         sys.stdout.write(' {} done {}/{}\n'.format(pssmf, i+1, splits))
   return

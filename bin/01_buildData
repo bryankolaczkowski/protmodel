@@ -1,6 +1,6 @@
 #!/bin/bash
 
-###############################################################################
+################################################################################
 # pipeline to build data for structure-property training and evaluation
 #
 # should be run from this directory
@@ -8,53 +8,64 @@
 # (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
 # Released under GNU General Public License (GPL)
 # bryank@ufl.edu
-###############################################################################
+################################################################################
 
-# where to put all the data
-OUTDIR=../data
+OUTDIR=../data            # location for all the data
+tmp=${OUTDIR}/mmseqs_tmp  # temporary storage for mmseqs runs
 
 case ${1} in
 
-###############################################################################
-# PART 1: generate amino-acid profiles using UniRef90 database
+################################################################################
+# PART 1: generate amino-acid profiles using UniRef50 database
 
 1)
-  # 1. download UniRef90 mmseqs db
-  # NOTE: this will take a day or more
-  echo "step ${1}: download uniref90 mmseqs2 database"
-  tmp=${OUTDIR}/mmseqs_tmp
-  out=${OUTDIR}/uniref90
-  [[ -d ${out} ]] || mkdir ${out}
-  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 1
-  mmseqs createindex ${out}/uniref90 ${tmp} --compressed 1
-  ;;
-
-2)
-  # 2. download UniRef50 mmseqs db
-  # NOTE: this will take a day or more
-  echo "step ${1}: download uniref50 mmseqs2 database"
-  tmp=${OUTDIR}/mmseqs_tmp
+  # 1. download UniRef50 mmseqs db
+  # NOTE: this can take a day or more
+  echo "step ${1}: uniref50 download"
   out=${OUTDIR}/uniref50
   [[ -d ${out} ]] || mkdir ${out}
   mmseqs databases UniRef50 ${out}/uniref50 ${tmp}
-  # don't compress this db; we may need to read the files
-  # no prefilter index needed; this is not a target db
+  ;;
+
+2)
+  # 2. each-vs-all UniRef50 search
+  # NOTE: this can take a few days or more
+  echo "step ${1}: uniref50 each-vs-all search"
+  qry=${OUTDIR}/uniref50/uniref50
+  trg=${qry}
+  aln=${OUTDIR}/uniref50/aln
+  mmseqs search ${qry} ${trg} ${aln} ${tmp} -a 1 -e 0.1 -s 4
   ;;
 
 3)
-  # 3. search uniref90 target, using uniref50 query
-  # NOTE: this should take a few days or more
-  echo "step ${1}: make profiles for uniref50"
-  tmp=${OUTDIR}/mmseqs_tmp
-  out=${OUTDIR}/uniref50_pssms
+  # 3. convert UniRef50 search results to profiles
+  # NOTE: this can take a day or more
+  echo "step ${1}: uniref50 profiles"
   qry=${OUTDIR}/uniref50/uniref50
-  trg=${OUTDIR}/uniref90/uniref90
-  ./makeProfiles -q ${qry} -t ${trg} -o ${out} --tmp ${tmp} --evalue 0.01 --split 100
+  trg=${qry}
+  aln=${OUTDIR}/uniref50/aln
+  prf=${OUTDIR}/uniref50/pro
+  mmseqs result2profile ${qry} ${trg} ${aln} ${prof} -e 0.1 --e-profile 0.1
   ;;
 
+4)
+  # 4. convert UniRef50 profiles to pssms
+  # NOTE: this can take a day or more
+  echo "step ${1}: uniref50 pssms"
+  prf=${OUTDIR}/uniref50/pro
+  psm=${OUTDIR}/uniref50/uniref50.pssm
+  mmseqs profile2pssm ${prf} ${psm}
+  ;;
 
+5)
+  # 5. convert UniRef50 pssms to probability distributions
+  # NOTE: this can take a day or more
+  echo "step ${1}: uniref50 amino-acid probability distributions"
+  #XX HERE XX#
+  ;;
 
-
+# END PART 1
+################################################################################
 
 
 # 1. get dssp properties for all current entries in PDB
@@ -108,4 +119,3 @@ case ${1} in
 
 esac
 echo "finished."
-
