@@ -45,7 +45,7 @@ case ${1} in
   trg=${qry}
   aln=${OUTDIR}/uniref50/aln
   prf=${OUTDIR}/uniref50/pro
-  mmseqs result2profile ${qry} ${trg} ${aln} ${prof} -e 0.1 --e-profile 0.1
+  mmseqs result2profile ${qry} ${trg} ${aln} ${prf} -e 0.1 --e-profile 0.1
   ;;
 
 4)
