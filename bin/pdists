@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+
+################################################################################
+# calculate amino-acid probability distribution profiles for an mmseqs2 pssm
+# file
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import distutils.util
+import argparse
+import math
+import numpy
+
+from prot3d._version import __version__
+
+# line ending
+ENDL = '\n'
+
+# input file information
+PSSM_SEQIDPRE = 'Query profile of sequence' # data header
+PSSM_SEQIDIDX = 4   # index of sequence id in data header
+PSSM_AAIDX    = 2   # first amino-acid index in data
+
+# output file information #
+AAORDR = 'ACDEFGHIKLMNPQRSTVWY'  # amino acid code ordering
+SEQPRE = '>seq_'                 # sequence identifier prefix
+
+# data dictionary information #
+NDEC   = 4       # number of decimal places for rounding
+DTA_ID = 'ID'    # dictionary key for sequence identifier
+DTA_PS = 'DATA'  # dictionary key for data array
+
+def _pdist(data):
+  """returns probability distribution of input raw data"""
+  #dta = numpy.array([ math.pow(2,x) for x in data ])
+  dta = numpy.array([ 1/(1+math.exp(-x)) for x in data ])
+  dta /= dta.sum()
+  dta  = dta.round(NDEC)
+  dta /= dta.sum()
+  dta  = dta.round(NDEC)
+  return dta
+
+def _nextdata(infile, lastline):
+  """returns (data,nextline) from infile; seq id in lastline"""
+  # make sure we're on a sequence id line
+  if lastline.find(PSSM_SEQIDPRE) != 0:
+    sys.stderr.write('ERRR: malformed line >{}<\n'.format(lastline))
+    sys.exit(1)
+  # set up data (empty) dictionary
+  data = {}
+  data[DTA_ID] = SEQPRE + lastline.split()[PSSM_SEQIDIDX]
+  data[DTA_PS] = []
+  # skip header in pssm file before each sequence data entry
+  infile.readline()
+  # collect the data!
+  nextline = infile.readline()
+  while nextline and nextline.find(PSSM_SEQIDPRE) != 0:
+    dta = _pdist([ int(x) for x in nextline.split()[PSSM_AAIDX:] ])
+    data[DTA_PS].append(dta)
+    nextline = infile.readline()
+  # done. whew! - go get your dance on ;)
+  return (data,nextline)
+
+def runpdists(infname, outfname, verbose):
+  """writes amino-acid probability distributions from infname to outfname"""
+  n_written = 0
+  with open(infname, 'r') as infile:
+    with open(outfname, 'w') as outfile:
+      with open(outfname+'.idx', 'w') as outfileidx:
+        # write output file header
+        outfile.write('#' + AAORDR + ENDL)
+        # parse file...
+        nextline = infile.readline()
+        while nextline:
+          data,nextline = _nextdata(infile, nextline)
+          # write index to index file
+          outfileidx.write(data[DTA_ID] + ',' + str(outfile.tell()) + ENDL)
+          # write data to outfile
+          outfile.write(data[DTA_ID] + ENDL)
+          for darr in data[DTA_PS]:
+            outfile.write(','.join([ '{:.{}f}'.format(x,NDEC) \
+                                     for x in darr ]) + ENDL)
+          n_written += 1
+          if verbose:
+            if n_written % 1000000 == 0:
+              sys.stdout.write('   1M done\n')
+            elif n_written % 100000 == 0:
+              sys.stdout.write(' 100k done\n')
+  if verbose:
+    sys.stdout.write('wrote {}.\n'.format(n_written))
+  return
+
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+  # parse command-line arguments
+  parser = argparse.ArgumentParser(
+                    description='calculates profiles from a pssm txt file',
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  # general options
+  parser.add_argument('--version', action='version', version=__version__)
+  parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                      dest='verbose',
+                      help='show runtime information on stdout',
+                      metavar='y|n')
+  parser.add_argument(dest='pssmf', help='mmseqs2 pssm txt file input',
+                      metavar='PSSM')
+  parser.add_argument(dest='outf', help='prob dist txt file output',
+                      metavar='FNAME')
+  parser.set_defaults(verbose=True,
+                      pssmf=None,
+                      outf=None)
+  # parse command-line arguments
+  args = parser.parse_args()
+
+  if not os.path.exists(args.pssmf):
+    sys.stderr.write('ERRR: infile {} nonexistent\n'.format(args.pssmf))
+    sys.exit(1)
+
+  if args.verbose:
+    sys.stdout.write('starting...\n')
+
+  runpdists(args.pssmf, args.outf, args.verbose)
+
+  if args.verbose:
+    sys.stdout.write('finished.\n')
+# END MAIN
+################################################################################

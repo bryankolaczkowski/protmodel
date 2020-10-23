@@ -16,10 +16,10 @@ tmp=${OUTDIR}/mmseqs_tmp  # temporary storage for mmseqs runs
 case ${1} in
 
 ################################################################################
-# PART 1: generate amino-acid profiles using UniRef50 database
+# PART 1: generate amino-acid profiles database
 
 1)
-  # 1. download UniRef50 mmseqs db
+  # download UniRef50 mmseqs db
   # NOTE: this can take a day or more
   echo "step ${1}: uniref50 download"
   out=${OUTDIR}/uniref50
@@ -28,90 +28,57 @@ case ${1} in
   ;;
 
 2)
-  # 2. each-vs-all UniRef50 search
-  # NOTE: this can take a few days or more
-  echo "step ${1}: uniref50 each-vs-all search"
-  qry=${OUTDIR}/uniref50/uniref50
-  trg=${qry}
-  aln=${OUTDIR}/uniref50/aln
-  mmseqs search ${qry} ${trg} ${aln} ${tmp} -a 1 -e 0.1 -s 4
+  # download UniRef90 mmseqs db
+  # NOTE: this can take a day or more
+  echo "step ${2}: uniref90 download"
+  out=${OUTDIR}/uniref90
+  [[ -d ${out} ]] || mkdir ${out}
+  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 1
+  mmseqs createindex ${out}/uniref90 ${tmp} --compressed 1
   ;;
 
 3)
-  # 3. convert UniRef50 search results to profiles
-  # NOTE: this can take a day or more
-  echo "step ${1}: uniref50 profiles"
+  # each-vs-all UniRef50-vs-90 search
+  # NOTE: this can take about a week
+  echo "step ${1}: uniref50-90 each-vs-all search"
   qry=${OUTDIR}/uniref50/uniref50
-  trg=${qry}
-  aln=${OUTDIR}/uniref50/aln
-  prf=${OUTDIR}/uniref50/pro
-  mmseqs result2profile ${qry} ${trg} ${aln} ${prf} -e 0.1 --e-profile 0.1
+  trg=${OUTDIR}/uniref90/uniref90
+  aln=${OUTDIR}/uniref50-90/aln
+  mmseqs search ${qry} ${trg} ${aln} ${tmp} -a 1 -e 0.1 -s 2
   ;;
 
 4)
-  # 4. convert UniRef50 profiles to pssms
+  # convert UniRef50 search results to profiles
   # NOTE: this can take a day or more
-  echo "step ${1}: uniref50 pssms"
-  prf=${OUTDIR}/uniref50/pro
-  psm=${OUTDIR}/uniref50/uniref50.pssm
-  mmseqs profile2pssm ${prf} ${psm}
+  echo "step ${1}: uniref50 profiles"
+  qry=${OUTDIR}/uniref50/uniref50
+  trg=${OUTDIR}/uniref90/uniref90
+  aln=${OUTDIR}/uniref50-90/aln
+  prf=${OUTDIR}/uniref50-90/pro
+  mmseqs result2profile ${qry} ${trg} ${aln} ${prf} -e 0.1 --e-profile 0.1
   ;;
 
 5)
-  # 5. convert UniRef50 pssms to probability distributions
+  # convert UniRef50 profiles to pssms
+  # NOTE: this can take a day or more
+  echo "step ${1}: uniref50 pssms"
+  prf=${OUTDIR}/uniref50-90/pro
+  psm=${OUTDIR}/uniref50-90/uniref50.pssm
+  mmseqs profile2pssm ${prf} ${psm}
+  ;;
+
+6)
+  # convert UniRef50 pssms to probability distributions
   # NOTE: this can take a day or more
   echo "step ${1}: uniref50 amino-acid probability distributions"
-  #XX HERE XX#
+  psm=${OUTDIR}/uniref50-90/uniref50.pssm
+  prb=${OUTDIR}/uniref50-90/uniref50.probdists.csv
+  ./pdists ${psm} ${prb}
   ;;
 
 # END PART 1
 ################################################################################
 
-
-# 1. get dssp properties for all current entries in PDB
-# NOTE: this will take a day or more
-#./getPDBdata -o ${OUTDIR}/pdbdata-strctinfo --exclude ${OUTDIR}/exclude_ids.txt
-
-## TRAIN-VALIDATE-TEST ........................................................
-
-# 2. cluster PDB sequences by sequence identity
-# NOTE: this will take a few minutes
-#./clustPDBdata --seqid 0.1 -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/clusters.csv
-
-# 3. split PDB data into training, validate and testing data
-# NOTE: this will take a moment
-#./splitPDBdata -c ${OUTDIR}/clusters.csv -o ${OUTDIR}/tvtsplit.txt > ${OUTDIR}/tvtsplit.log
-
-# 4. calculate frequencies of each secondary structure in the training data
-# NOTE: this will take a few minutes
-#./calcTrainWts -f ${OUTDIR}/tvtsplit.txt -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/tvtsplit.trainwts.txt
-
-## EVOLUTIONARY INFORMATION ...................................................
-
-# 5. generate fasta file for structure data from pdb
-# NOTE: this will take a few minutes
-#./makePDBfasta -d ${OUTDIR}/pdbdata-strctinfo -o ${OUTDIR}/pdbdata-strctinfo.fasta
-
-# 6. convert fasta file to mmseqs2 query database
-# NOTE: this will take a moment
-#mmseqs createdb ${OUTDIR}/pdbdata-strctinfo.fasta ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db --createdb-mode 1 --shuffle 0
-
-# 7. search pdbdata fasta file against UniRef90 database
-# NOTE: this will take at least a few days
-#mmseqs search ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqsdb/pdb_vs_uniref ${OUTDIR}/mmseqs_tmp -e 0.005 -a
-
-# 8. convert UniRef90 search results to profile database
-#mmseqs result2profile ${OUTDIR}/mmseqsdb/pdbdata-strctinfo.db ${OUTDIR}/mmseqsdb/uniref90 ${OUTDIR}/mmseqsdb/pdb_vs_uniref ${OUTDIR}/mmseqsdb/pdb_vs_uniref_profile
-
-# 9. convert UniRef90 profile database to pssms
-#mmseqs profile2pssm ${OUTDIR}/mmseqsdb/pdb_vs_uniref_profile ${OUTDIR}/pdb_vs_uniref_profile.pssm
-
-# 10. parse UniRef90 pssms
-
-
-# 11. clean up mmseqs databases we don't need
-# NOTE: leave the UniRef90 database that took a day or more to download
-# Note: takes a moment
 
 *)
   echo "error: unknown or missing command-line option ${1}."
