@@ -1,5 +1,5 @@
 ################################################################################
-# library for encoding amino-acid structural data
+# library for encoding amino-acid data
 #
 # (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
 # Released under GNU General Public License (GPL)

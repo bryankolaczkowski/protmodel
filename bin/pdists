@@ -24,7 +24,7 @@ import argparse
 import math
 import numpy
 
-from prot3d._version import __version__
+from protmodel._version import __version__
 
 # line ending
 ENDL = '\n'
