@@ -24,7 +24,7 @@ case ${1} in
   echo "step ${1}: uniref50 download"
   out=${OUTDIR}/uniref50
   [[ -d ${out} ]] || mkdir ${out}
-  mmseqs databases UniRef50 ${out}/uniref50 ${tmp}
+  mmseqs databases UniRef50 ${out}/uniref50 ${tmp} 1> bd${1}.log 2> bd${1}.err
   ;;
 
 2)
@@ -33,8 +33,8 @@ case ${1} in
   echo "step ${2}: uniref90 download"
   out=${OUTDIR}/uniref90
   [[ -d ${out} ]] || mkdir ${out}
-  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 1
-  mmseqs createindex ${out}/uniref90 ${tmp} --compressed 1
+  mmseqs databases UniRef90 ${out}/uniref90 ${tmp} --compressed 1 1> bd${1}.log 2> bd${1}.err
+  mmseqs createindex ${out}/uniref90 ${tmp} --compressed 1 1>> bd${1}.log 2>> bd${1}.err
   ;;
 
 3)
@@ -44,7 +44,7 @@ case ${1} in
   qry=${OUTDIR}/uniref50/uniref50
   trg=${OUTDIR}/uniref90/uniref90
   aln=${OUTDIR}/uniref50-90/aln
-  mmseqs search ${qry} ${trg} ${aln} ${tmp} -a 1 -e 0.1 -s 2
+  mmseqs search ${qry} ${trg} ${aln} ${tmp} -a 1 -e 0.1 -s 2 1> bd${1}.log 2> bd${1}.err
   ;;
 
 4)
@@ -55,7 +55,7 @@ case ${1} in
   trg=${OUTDIR}/uniref90/uniref90
   aln=${OUTDIR}/uniref50-90/aln
   prf=${OUTDIR}/uniref50-90/pro
-  mmseqs result2profile ${qry} ${trg} ${aln} ${prf} -e 0.1 --e-profile 0.1
+  mmseqs result2profile ${qry} ${trg} ${aln} ${prf} -e 0.1 --e-profile 0.1 1> bd${1}.log 2> bd${1}.err
   ;;
 
 5)
@@ -64,21 +64,35 @@ case ${1} in
   echo "step ${1}: uniref50 pssms"
   prf=${OUTDIR}/uniref50-90/pro
   psm=${OUTDIR}/uniref50-90/uniref50.pssm
-  mmseqs profile2pssm ${prf} ${psm}
+  mmseqs profile2pssm ${prf} ${psm} 1> bd${1}.log 2> bd${1}.err
   ;;
 
 6)
   # convert UniRef50 pssms to probability distributions
-  # NOTE: this can take a day or more
+  # NOTE: this can take a few days
   echo "step ${1}: uniref50 amino-acid probability distributions"
   psm=${OUTDIR}/uniref50-90/uniref50.pssm
   prb=${OUTDIR}/uniref50-90/uniref50.probdists.csv
-  ./pdists ${psm} ${prb}
+  ./pdists ${psm} ${prb} 1> bd${1}.log 2> bd${1}.err
   ;;
 
 # END PART 1
 ################################################################################
 
+################################################################################
+# PART 2: train-validate-test split
+
+7)
+  # cluster UniRef50 database at very low sequence similarity
+  # NOTE: this can take a day or more
+  echo "step ${1}: uniref50 clustering"
+  db=${OUTDIR}/uniref50/uniref50
+  cdb=${OUTDIR}/uniref50/clust01
+  mmseqs cluster ${db} ${cdb} ${tmp} -c 0.6 -e 0.1 --min-seq-id 0.1 --threads 15 1> bd${1}.log 2> bd${1}.err
+  ;;
+
+# END PART 2
+################################################################################
 
 *)
   echo "error: unknown or missing command-line option ${1}."
@@ -86,3 +100,4 @@ case ${1} in
 
 esac
 echo "finished."
+
