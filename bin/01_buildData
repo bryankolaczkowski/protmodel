@@ -88,7 +88,22 @@ case ${1} in
   echo "step ${1}: uniref50 clustering"
   db=${OUTDIR}/uniref50/uniref50
   cdb=${OUTDIR}/uniref50/clust01
-  mmseqs cluster ${db} ${cdb} ${tmp} -c 0.6 -e 0.1 --min-seq-id 0.1 --threads 15 1> bd${1}.log 2> bd${1}.err
+  mmseqs cluster ${db} ${cdb} ${tmp} -c 0.6 -e 0.1 --min-seq-id 0.1 1> bd${1}.log 2> bd${1}.err
+  mmseqs createtsv ${db} ${db} ${cdb} ${cdb}.tsv 1>> bd${1}.log 2>> bd${1}.err 
+  ;;
+
+8)
+  # split UniRef50 database into train-validate-test, preserving
+  # low-sequence-similarity clustering
+  # NOTE: this can take an hour or so
+  rseed=20996417
+  train=0.8
+  valid=0.1
+  testd=0.1
+  cdb=${OUTDIR}/uniref50/clust01.tsv
+  lkp=${OUTDIR}/uniref50/uniref50.lookup
+  out=${OUTDIR}/uniref50-90/train_valid_test.txt
+  ./tvt ${cdb} ${lkp} ${out} ${train} ${valid} ${testd} ${rseed} 1> bd${1}.log 2> bd${1}.err 
   ;;
 
 # END PART 2

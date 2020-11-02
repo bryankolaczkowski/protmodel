@@ -1,0 +1,200 @@
+#!/usr/bin/env -S python3 -u
+
+################################################################################
+# split clustered mmseqs2 database into train-validate-test sets, while
+# keeping sequences in the same cluster together
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the prot3d module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import distutils.util
+import argparse
+import random
+
+from protmodel._version import __version__
+
+def _count(id_lst, id_sz_map):
+  count = 0
+  for id in id_lst:
+    count += id_sz_map[id]
+  return count
+
+def _writedata(outf, ids, id_lst_map):
+  for id in ids:
+    for seq in id_lst_map[id]:
+      outf.write('{}\n'.format(seq))
+  return
+
+def runtsv(clstfname, idmpfname, outfname, p_train, p_valid, p_test, verbose):
+  """splits sequence clusters into train-validate-test subsets"""
+  
+  # read id mapping into memory
+  if verbose:
+    sys.stdout.write('reading id map...')
+    sys.stdout.flush()
+  id_map = {}
+  with open(idmpfname, 'r') as handle:
+    for line in handle:
+      id_map[line.split()[1]] = line.split()[0]
+  if verbose:
+    sys.stdout.write('done. read {} sequence ids.\n'.format(len(id_map.keys())))
+
+  # read clusters into memory
+  if verbose:
+    sys.stdout.write('reading sequence clusters...')
+    sys.stdout.flush()
+  clst_id_lst = []
+  clst_lst_map = {}
+  with open(clstfname, 'r') as handle:
+    for line in handle:
+      linearr = line.split()
+      id1 = id_map[linearr[0]]
+      id2 = id_map[linearr[1]]
+      if id1 not in clst_lst_map.keys():
+        clst_id_lst.append(id1)
+        clst_lst_map[id1] = []
+      clst_lst_map[id1].append(id2)
+  if verbose:
+    sys.stdout.write('done. read {} clusters.\n'.format(len(clst_id_lst)))
+
+  # calculate cluster sizes
+  if verbose:
+    sys.stdout.write('calculating cluster sizes...')
+    sys.stdout.flush()
+  clst_size_map = {}
+  totl = 0
+  for id in clst_id_lst:
+    sz = len(clst_lst_map[id])
+    clst_size_map[id] = sz
+    totl += sz
+  if verbose:
+    sys.stdout.write('done. {} total sequences.\n'.format(totl))
+
+  # split clusters into train-validate-test
+  if verbose:
+    sys.stdout.write('splitting sequences...')
+    sys.stdout.flush()
+
+  # randomize clusters
+  random.shuffle(clst_id_lst)
+
+  # calculate train-validate-test split indices
+  idx1 = round(p_train * len(clst_id_lst))
+  idx2 = round((p_train+p_valid) * len(clst_id_lst))
+  train_ids = clst_id_lst[   0:idx1]
+  valid_ids = clst_id_lst[idx1:idx2]
+  testd_ids = clst_id_lst[idx2:    ]
+
+  if verbose:
+    train_count = _count(train_ids, clst_size_map)
+    valid_count = _count(valid_ids, clst_size_map)
+    testd_count = _count(testd_ids, clst_size_map)
+
+    trainp = round((train_count/totl)*100, 1)
+    validp = round((valid_count/totl)*100, 1)
+    testdp = round((testd_count/totl)*100, 1)
+
+    sys.stdout.write('done.\n')
+    sys.stdout.write('   training data: {} {}%\n'.format(train_count,
+                                                         trainp))
+    sys.stdout.write(' validation data: {} {}%\n'.format(valid_count,
+                                                         validp))
+    sys.stdout.write('    testing data: {} {}%\n'.format(testd_count,
+                                                         testdp))
+
+  # write train-validate-test split file
+  if verbose:
+    sys.stdout.write('writing train-validate-test file...')
+    sys.stdout.flush()
+
+  with open(outfname, 'w') as outf:
+    outf.write('#train\n')
+    _writedata(outf, train_ids, clst_lst_map)
+    outf.write('#validate\n')
+    _writedata(outf, valid_ids, clst_lst_map)
+    outf.write('#test\n')
+    _writedata(outf, testd_ids, clst_lst_map)
+
+  if verbose:
+    sys.stdout.write('done.\n')
+
+  return
+
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+  # parse command-line arguments
+  parser = argparse.ArgumentParser(
+                    description='calculates profiles from a pssm txt file',
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  # general options
+  parser.add_argument('--version', action='version', version=__version__)
+  parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                      dest='verbose',
+                      help='show runtime information on stdout',
+                      metavar='y|n')
+  parser.add_argument(dest='clstf', help='mmseqs2 tsv cluster file',
+                      metavar='CLSTF')
+  parser.add_argument(dest='idmpf', help='mmseqs2 id lookup file',
+                      metavar='IDMPF')
+  parser.add_argument(dest='outf', help='prob dist txt file output',
+                      metavar='OUTF')
+  parser.add_argument(dest='trainp', type=float, 
+                      help='proportion of training data',
+                      metavar='Ptrain')
+  parser.add_argument(dest='validp', type=float,
+                      help='proportion of validation data',
+                      metavar='Pvalidate')
+  parser.add_argument(dest='testdp', type=float,
+                      help='proportion of testing data',
+                      metavar='Ptest')
+  parser.add_argument(dest='rseed', type=int,
+                      help='random number seed',
+                      metavar='INT')
+  parser.set_defaults(verbose=True,
+                      clstf=None,
+                      idmpf=None,
+                      outf=None,
+                      trainp=0.8,
+                      validp=0.1,
+                      testdp=0.1,
+                      rseed=2021)
+  # parse command-line arguments
+  args = parser.parse_args()
+
+  for f in [args.clstf, args.idmpf]:
+    if not os.path.exists(f):
+      sys.stderr.write('ERRR: infile {} nonexistent\n'.format(f))
+      sys.exit(1)
+
+  pdiff = abs(1.0 - (args.trainp + args.validp + args.testdp))
+  if pdiff > 1.0e-10:
+    sys.sderr.write('ERRR: {}+{}+{} != 1.0\n'.format(args.trainp,
+                                                     args.validp,
+                                                     args.testdp))
+    sys.exit(1)
+
+  if args.verbose:
+    sys.stdout.write('starting...\n')
+
+  random.seed(args.rseed)
+  runtsv(args.clstf,  args.idmpf,  args.outf, 
+         args.trainp, args.validp, args.testdp, args.verbose)
+
+  if args.verbose:
+    sys.stdout.write('finished.\n')
+# END MAIN
+################################################################################
