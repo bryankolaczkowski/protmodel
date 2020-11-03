@@ -115,7 +115,7 @@ case ${1} in
   sedb=${OUTDIR}/uniref50/uniref50
   seid=${sedb}.index
   outdr=${OUTDIR}/uniref50-90/tvtdata
-  ./writedata ${sedb} ${seid} ${prdb} ${prid} ${tvt} ${outdr} 1> bd${1}.log 2> bd${1}.err
+  ./writedata ${sedb} ${seid} ${prdb} ${prid} ${tvt} ${outdr} --threads 8 1> bd${1}.log 2> bd${1}.err
   ;;
 
 # END PART 2
@@ -127,3 +127,4 @@ case ${1} in
 
 esac
 echo "finished."
+

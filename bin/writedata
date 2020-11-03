@@ -201,13 +201,16 @@ if __name__ == '__main__':
                       metavar='TVT')
   parser.add_argument(dest='outdir', help='output directory',
                       metavar='DIR')
+  parser.add_argument('--threads', dest='threads', type=int,
+                      help='number of threads', metavar='N')
   parser.set_defaults(verbose=True,
                       seq_db=None,
                       seq_id=None,
                       pro_db=None,
                       pro_id=None,
                       tvt_split=None,
-                      outdir=None)
+                      outdir=None,
+                      threads=0)
   # parse command-line arguments
   args = parser.parse_args()
 
@@ -221,6 +224,9 @@ if __name__ == '__main__':
     if not os.path.exists(f):
       sys.stderr.write('ERRR: infile {} nonexistent\n'.format(f))
       sys.exit(1)
+
+  if args.threads <= 0 or args.threads > os.cpu_count():
+    args.threads = os.cpu_count()
 
   if args.verbose:
     sys.stdout.write('starting...\n')
@@ -246,11 +252,11 @@ if __name__ == '__main__':
     if not os.path.exists(data_outdir):
       os.mkdir(data_outdir)
 
-    chunksize = int(len(data)/os.cpu_count())
+    chunksize = int(len(data)/args.threads)
     file_count = 100
 
     writers = []
-    for i in range(os.cpu_count()):
+    for i in range(args.threads):
       beg = i * chunksize
       end = (i+1) * chunksize
       if i == os.cpu_count()-1:
