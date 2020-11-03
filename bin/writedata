@@ -1,0 +1,218 @@
+#!/usr/bin/env -S python3 -u
+
+################################################################################
+# combines sequence and evolutionary profiling data, writing tensorflow
+# data records to train, validate and test directories
+#
+# (C) 2020 Bryan Kolaczkowski, University of Florida, Gainesville, FL USA
+# Released under GNU General Public License (GPL)
+# bryank@ufl.edu
+################################################################################
+
+# he he :) - get path to this running file to import the protmodel module
+import os
+libpath = os.path.normpath(                                                   \
+            os.path.join(                                                     \
+                os.path.dirname(os.path.abspath(os.path.realpath(__file__))), \
+                '..')                                                         \
+            )
+import sys
+sys.path.append(libpath)
+
+import distutils.util
+import argparse
+import random
+import numpy
+import protmodel.aafeatures
+
+from protmodel._version import __version__
+
+def _write(data_id, seq, pro, outf):
+  #XXTODOXX#
+  return
+
+def _get_seq(handle, offset, length, aa_seq_map):
+  seq = []
+  handle.seek(offset)
+  seqstr = handle.readline().strip()
+  for c in seqstr:
+    seq.append(aa_seq_map[c])
+  return numpy.vstack(seq)
+
+def _get_pro(handle, offset):
+  handle.seek(offset)
+  handle.readline() # skip sequence id
+  data = []
+  line = handle.readline()
+  while line and line[0] != '>':
+    row = [ float(x) for x in line.strip().split(',') ]
+    data.append(row)
+    line = handle.readline()
+  return numpy.array(data)
+
+def run_writedata(seq_db, seq_id, pro_db, pro_id, tvt_split, outdir, verbose):
+  """writes tensorflow data records to disk"""
+
+  # read sequence index
+  if verbose:
+    sys.stdout.write('reading sequence index...')
+    sys.stdout.flush()
+  seq_db_index = {}
+  with open(seq_id, 'r') as handle:
+    for line in handle:
+      linearr = line.split()
+      sid = linearr[0]
+      beg = int(linearr[1])
+      lgh = int(linearr[2])
+      seq_db_index[sid] = (beg,lgh)
+  if verbose:
+    sys.stdout.write('done. found {} sequence indices\n'.format( \
+                     len(seq_db_index.keys())))
+
+  # read profile index
+  if verbose:
+    sys.stdout.write('reading profile index...')
+    sys.stdout.flush()
+  pro_db_index = {}
+  with open(pro_id, 'r') as handle:
+    for line in handle:
+      linearr = line.strip().split(',')
+      sid = linearr[0].split('_')[1]
+      idx = int(linearr[1])
+      pro_db_index[sid] = idx
+  if verbose:
+    sys.stdout.write('done. found {} profile indices\n'.format( \
+                     len(pro_db_index.keys())))
+
+  # read train-validate-test split
+  if verbose:
+    sys.stdout.write('reading tvt split...')
+    sys.stdout.flush()
+  tvt_map = {}
+  with open(tvt_split, 'r') as handle:
+    did  = ''
+    data = []
+    for line in handle:
+      if line[0] == '#':
+        if did and data:
+          tvt_map[did] = data
+        did = line[1:].strip()
+        data = []
+      else:
+        data.append(line.strip())
+    if did and data:
+      tvt_map[did] = data
+  if verbose:
+    ttl = 0
+    for v in tvt_map.values():
+      ttl += len(v)
+    sys.stdout.write('done. found {} total data\n'.format(ttl))
+    for k,v in tvt_map.items():
+      p = round((len(v) / ttl) * 100, 1)
+      sys.stdout.write('  {}: {} {}%\n'.format(k, len(v), p))
+
+  # parse train-validate-test data
+  if verbose:
+    sys.stdout.write('writing data...\n')
+  aa_seq_map = protmodel.aafeatures.AANDXred() # char to vector for residues
+  data_per_file = 35000 # records to write to each output file
+  with open(seq_db, 'r') as seq_handle:
+    with open(pro_db, 'r') as pro_handle:
+      for datatype, data in tvt_map.items():
+        if verbose:
+          sys.stdout.write(' writing {}...\n'.format(datatype))
+        # shuffle data ids
+        random.shuffle(data)
+        # create output directory if needed
+        data_outdir = outdir + os.path.sep + datatype
+        if not os.path.exists(data_outdir):
+          os.mkdir(data_outdir)
+        # write data to files
+        data_written = 0
+        file_num = 0
+        fnamepatt = data_outdir + os.path.sep + 'd{}.tfd' 
+        outf = open(fnamepatt.format(file_num), 'w')
+        for data_id in data:
+          seq = _get_seq(seq_handle,
+                         seq_db_index[data_id][0],
+                         seq_db_index[data_id][1],
+                         aa_seq_map)
+          pro = _get_pro(pro_handle, pro_db_index[data_id])
+          if seq.shape[0] != pro.shape[0]:
+            sys.stderr.write('ERRR: {} {} {}\n'.format(data_id,
+                                                       seq.shape,
+                                                       pro.shape))
+          else:
+            _write(data_id, seq, pro, outf)
+            data_written += 1
+          if data_written == data_per_file:
+            outf.close()
+            if verbose:
+              sys.stdout.write('  done file {}\n'.format(file_num))
+            data_written = 0
+            file_num += 1
+            outf = open(fnamepatt.format(file_num), 'w') 
+        if not outf.closed:
+          outf.close()
+  if verbose:
+    sys.stdout.write('done.\n')
+
+  return
+
+################################################################################
+# BEG MAIN
+
+if __name__ == '__main__':
+  # parse command-line arguments
+  parser = argparse.ArgumentParser(
+                    description='writes tensorflow data records to disk',
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  # general options
+  parser.add_argument('--version', action='version', version=__version__)
+  parser.add_argument('-v', '--verbose', type=distutils.util.strtobool,
+                      dest='verbose',
+                      help='show runtime information on stdout',
+                      metavar='y|n')
+  parser.add_argument(dest='seq_db', help='mmseqs2 sequence database',
+                      metavar='DBF')
+  parser.add_argument(dest='seq_id', help='mmseqs2 sequence database index',
+                      metavar='DBI')
+  parser.add_argument(dest='pro_db', help='evol profile database',
+                      metavar='PDB')
+  parser.add_argument(dest='pro_id', help='evol profile index',
+                      metavar='PDI')
+  parser.add_argument(dest='tvt_split', help='train-validate test split file',
+                      metavar='TVT')
+  parser.add_argument(dest='outdir', help='output directory',
+                      metavar='DIR')
+  parser.set_defaults(verbose=True,
+                      seq_db=None,
+                      seq_id=None,
+                      pro_db=None,
+                      pro_id=None,
+                      tvt_split=None,
+                      outdir=None)
+  # parse command-line arguments
+  args = parser.parse_args()
+
+  if args.outdir[-1] == os.path.sep:
+    args.outdir = args.outdir[:-1]
+
+  if not os.path.exists(args.outdir):
+    os.makedirs(args.outdir)
+
+  for f in [args.seq_db, args.seq_id, args.pro_db, args.pro_id, args.tvt_split]:
+    if not os.path.exists(f):
+      sys.stderr.write('ERRR: infile {} nonexistent\n'.format(f))
+      sys.exit(1)
+
+  if args.verbose:
+    sys.stdout.write('starting...\n')
+
+  run_writedata(args.seq_db, args.seq_id, args.pro_db, args.pro_id,
+                args.tvt_split, args.outdir, args.verbose)
+
+  if args.verbose:
+    sys.stdout.write('finished.\n')
+# END MAIN
+################################################################################

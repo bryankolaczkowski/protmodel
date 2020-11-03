@@ -138,7 +138,7 @@ def runtsv(clstfname, idmpfname, outfname, p_train, p_valid, p_test, verbose):
 if __name__ == '__main__':
   # parse command-line arguments
   parser = argparse.ArgumentParser(
-                    description='calculates profiles from a pssm txt file',
+                    description='splits data clusters train-validate-test',
                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   # general options
   parser.add_argument('--version', action='version', version=__version__)

@@ -106,6 +106,18 @@ case ${1} in
   ./tvt ${cdb} ${lkp} ${out} ${train} ${valid} ${testd} ${rseed} 1> bd${1}.log 2> bd${1}.err 
   ;;
 
+9)
+  # write sharded tensorflow input files for UniRef50 data
+  # NOTE: this can take a few days or so
+  tvt=${OUTDIR}/uniref50-90/train_valid_test.txt
+  prdb=${OUTDIR}/uniref50-90/uniref50.probdists.csv
+  prid=${prdb}.idx
+  sedb=${OUTDIR}/uniref50/
+  seid=${sedb}.index
+  outdr=${OUTDIR}/uniref50-90/tvtdata
+  ./writedata ${sedb} ${seid} ${prdb} ${prid} ${tvt} ${outdr}
+  ;;
+
 # END PART 2
 ################################################################################
 
