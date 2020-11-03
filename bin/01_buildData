@@ -89,7 +89,7 @@ case ${1} in
   db=${OUTDIR}/uniref50/uniref50
   cdb=${OUTDIR}/uniref50/clust01
   mmseqs cluster ${db} ${cdb} ${tmp} -c 0.6 -e 0.1 --min-seq-id 0.1 1> bd${1}.log 2> bd${1}.err
-  mmseqs createtsv ${db} ${db} ${cdb} ${cdb}.tsv 1>> bd${1}.log 2>> bd${1}.err 
+  mmseqs createtsv ${db} ${db} ${cdb} ${cdb}.tsv 1>> bd${1}.log 2>> bd${1}.err
   ;;
 
 8)
@@ -103,7 +103,7 @@ case ${1} in
   cdb=${OUTDIR}/uniref50/clust01.tsv
   lkp=${OUTDIR}/uniref50/uniref50.lookup
   out=${OUTDIR}/uniref50-90/train_valid_test.txt
-  ./tvt ${cdb} ${lkp} ${out} ${train} ${valid} ${testd} ${rseed} 1> bd${1}.log 2> bd${1}.err 
+  ./tvt ${cdb} ${lkp} ${out} ${train} ${valid} ${testd} ${rseed} 1> bd${1}.log 2> bd${1}.err
   ;;
 
 9)
@@ -112,10 +112,10 @@ case ${1} in
   tvt=${OUTDIR}/uniref50-90/train_valid_test.txt
   prdb=${OUTDIR}/uniref50-90/uniref50.probdists.csv
   prid=${prdb}.idx
-  sedb=${OUTDIR}/uniref50/
+  sedb=${OUTDIR}/uniref50/uniref50
   seid=${sedb}.index
   outdr=${OUTDIR}/uniref50-90/tvtdata
-  ./writedata ${sedb} ${seid} ${prdb} ${prid} ${tvt} ${outdr}
+  ./writedata ${sedb} ${seid} ${prdb} ${prid} ${tvt} ${outdr} 1> bd${1}.log 2> bd${1}.err
   ;;
 
 # END PART 2
@@ -127,4 +127,3 @@ case ${1} in
 
 esac
 echo "finished."
-

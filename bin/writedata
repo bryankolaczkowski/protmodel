@@ -22,36 +22,98 @@ sys.path.append(libpath)
 import distutils.util
 import argparse
 import random
+import multiprocessing
 import numpy
+import tensorflow
 import protmodel.aafeatures
+import protmodel.tfserialize
 
 from protmodel._version import __version__
 
-def _write(data_id, seq, pro, outf):
-  #XXTODOXX#
-  return
+seq_db       = None
+seq_db_index = None
+pro_db       = None
+pro_db_index = None
+data_outdir  = None
+aa_seq_map   = protmodel.aafeatures.AANDXred()
 
-def _get_seq(handle, offset, length, aa_seq_map):
-  seq = []
-  handle.seek(offset)
-  seqstr = handle.readline().strip()
-  for c in seqstr:
-    seq.append(aa_seq_map[c])
-  return numpy.vstack(seq)
+class WriteProcess (multiprocessing.Process):
+  FILE_PREFIX    = 'd'    # prefix files with this
+  FILE_EXTENSION = '.tfd' # suffix files with this
 
-def _get_pro(handle, offset):
-  handle.seek(offset)
-  handle.readline() # skip sequence id
-  data = []
-  line = handle.readline()
-  while line and line[0] != '>':
-    row = [ float(x) for x in line.strip().split(',') ]
-    data.append(row)
+  # initialize a file writer process
+  def __init__(self, proc_id, file_count, outdir, data, verbose):
+    multiprocessing.Process.__init__(self)
+    self.id      = proc_id
+    self.data    = data
+    self.nfiles  = file_count
+    self.outdir  = outdir
+    self.verbose = verbose
+    return
+
+  def _get_seq(self, handle, offset):
+    seq = []
+    handle.seek(offset)
+    seqstr = handle.readline().strip()
+    for c in seqstr:
+      seq.append(aa_seq_map[c])
+    return numpy.vstack(seq)
+
+  def _get_pro(self, handle, offset):
+    handle.seek(offset)
+    handle.readline() # skip sequence id
+    data = []
     line = handle.readline()
-  return numpy.array(data)
+    while line and line[0] != '>':
+      row = [ float(x) for x in line.strip().split(',') ]
+      data.append(row)
+      line = handle.readline()
+    return numpy.array(data)
 
-def run_writedata(seq_db, seq_id, pro_db, pro_id, tvt_split, outdir, verbose):
-  """writes tensorflow data records to disk"""
+  def run(self):
+    if self.verbose:
+      sys.stdout.write('starting proc {}\n'.format(self.id))
+
+    # set up writers
+    writers = []
+    for i in range(self.nfiles):
+      fname = self.outdir + os.path.sep + self.FILE_PREFIX + str(self.id) + \
+              '_' + str(i) + self.FILE_EXTENSION
+      comp = tensorflow.io.TFRecordOptions(compression_type='ZLIB')
+      writ = tensorflow.io.TFRecordWriter(fname, options=comp)
+      writers.append(writ)
+
+    # parse and write data
+    with open(seq_db, 'r') as seq_file:
+      with open(pro_db, 'r') as pro_file:
+        writer_id = 0
+        for data_id in self.data:
+          # parse
+          seq = self._get_seq(seq_file, seq_db_index[data_id][0])
+          pro = self._get_pro(pro_file, pro_db_index[data_id])
+          # serialize
+          record = protmodel.tfserialize.serialize_data(seq, pro)
+          # write
+          writers[writer_id].write(record)
+          # iterate 'round the circle of writers
+          writer_id += 1
+          if writer_id == len(writers):
+            writer_id = 0
+
+    # close up file writers
+    for writer in writers:
+      writer.close()
+
+    if self.verbose:
+      sys.stdout.write('done proc {}\n'.format(self.id))
+    return
+
+
+
+def setup_writedata(seq_id, pro_id, tvt_split, outdir, verbose):
+  """sets up indexing and data for tensorflow data write"""
+  global seq_db_index
+  global pro_db_index
 
   # read sequence index
   if verbose:
@@ -101,7 +163,7 @@ def run_writedata(seq_db, seq_id, pro_db, pro_id, tvt_split, outdir, verbose):
       else:
         data.append(line.strip())
     if did and data:
-      tvt_map[did] = data
+      tvt_map[did] = numpy.array(data)
   if verbose:
     ttl = 0
     for v in tvt_map.values():
@@ -111,53 +173,7 @@ def run_writedata(seq_db, seq_id, pro_db, pro_id, tvt_split, outdir, verbose):
       p = round((len(v) / ttl) * 100, 1)
       sys.stdout.write('  {}: {} {}%\n'.format(k, len(v), p))
 
-  # parse train-validate-test data
-  if verbose:
-    sys.stdout.write('writing data...\n')
-  aa_seq_map = protmodel.aafeatures.AANDXred() # char to vector for residues
-  data_per_file = 35000 # records to write to each output file
-  with open(seq_db, 'r') as seq_handle:
-    with open(pro_db, 'r') as pro_handle:
-      for datatype, data in tvt_map.items():
-        if verbose:
-          sys.stdout.write(' writing {}...\n'.format(datatype))
-        # shuffle data ids
-        random.shuffle(data)
-        # create output directory if needed
-        data_outdir = outdir + os.path.sep + datatype
-        if not os.path.exists(data_outdir):
-          os.mkdir(data_outdir)
-        # write data to files
-        data_written = 0
-        file_num = 0
-        fnamepatt = data_outdir + os.path.sep + 'd{}.tfd' 
-        outf = open(fnamepatt.format(file_num), 'w')
-        for data_id in data:
-          seq = _get_seq(seq_handle,
-                         seq_db_index[data_id][0],
-                         seq_db_index[data_id][1],
-                         aa_seq_map)
-          pro = _get_pro(pro_handle, pro_db_index[data_id])
-          if seq.shape[0] != pro.shape[0]:
-            sys.stderr.write('ERRR: {} {} {}\n'.format(data_id,
-                                                       seq.shape,
-                                                       pro.shape))
-          else:
-            _write(data_id, seq, pro, outf)
-            data_written += 1
-          if data_written == data_per_file:
-            outf.close()
-            if verbose:
-              sys.stdout.write('  done file {}\n'.format(file_num))
-            data_written = 0
-            file_num += 1
-            outf = open(fnamepatt.format(file_num), 'w') 
-        if not outf.closed:
-          outf.close()
-  if verbose:
-    sys.stdout.write('done.\n')
-
-  return
+  return tvt_map
 
 ################################################################################
 # BEG MAIN
@@ -209,8 +225,49 @@ if __name__ == '__main__':
   if args.verbose:
     sys.stdout.write('starting...\n')
 
-  run_writedata(args.seq_db, args.seq_id, args.pro_db, args.pro_id,
-                args.tvt_split, args.outdir, args.verbose)
+  seq_db = args.seq_db
+  pro_db = args.pro_db
+  tvt_map = setup_writedata(args.seq_id, args.pro_id,
+                            args.tvt_split, args.outdir, args.verbose)
+
+  ## write data seems to need to be in main context, not in a function ##
+  # parse train-validate-test data
+  if args.verbose:
+    sys.stdout.write('writing data...\n')
+
+  # read-write data
+  for datatype, data in tvt_map.items():
+    if args.verbose:
+      sys.stdout.write(' writing {}...\n'.format(datatype))
+    # shuffle data ids
+    random.shuffle(data)
+    # create output directory if needed
+    data_outdir = args.outdir + os.path.sep + datatype
+    if not os.path.exists(data_outdir):
+      os.mkdir(data_outdir)
+
+    chunksize = int(len(data)/os.cpu_count())
+    file_count = 100
+
+    writers = []
+    for i in range(os.cpu_count()):
+      beg = i * chunksize
+      end = (i+1) * chunksize
+      if i == os.cpu_count()-1:
+        end = len(data)
+      mydata = data[beg:end]
+      writer = WriteProcess(i, file_count, data_outdir, mydata, args.verbose)
+      writers.append(writer)
+
+    for writer in writers:
+      writer.start()
+    for writer in writers:
+      writer.join()
+    for writer in writers:
+      writer.close()
+
+    if args.verbose:
+      sys.stdout.write('done.\n')
 
   if args.verbose:
     sys.stdout.write('finished.\n')
