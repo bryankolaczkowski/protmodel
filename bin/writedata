@@ -22,6 +22,7 @@ sys.path.append(libpath)
 import distutils.util
 import argparse
 import random
+import math
 import multiprocessing
 import numpy
 import tensorflow
@@ -30,23 +31,26 @@ import protmodel.tfserialize
 
 from protmodel._version import __version__
 
-seq_db       = None
-seq_db_index = None
-pro_db       = None
-pro_db_index = None
-data_outdir  = None
-aa_seq_map   = protmodel.aafeatures.AANDXred()
+aa_seq_map = protmodel.aafeatures.AANDXred()
 
 class WriteProcess (multiprocessing.Process):
   FILE_PREFIX    = 'd'    # prefix files with this
   FILE_EXTENSION = '.tfd' # suffix files with this
 
   # initialize a file writer process
-  def __init__(self, proc_id, file_count, outdir, data, verbose):
+  def __init__(self, proc_id, file_count,
+               seq_db_f, seq_db_idx, pro_db_f, pro_db_idx,
+               data, dbeg, dend, outdir, verbose):
     multiprocessing.Process.__init__(self)
     self.id      = proc_id
-    self.data    = data
     self.nfiles  = file_count
+    self.seq_db  = seq_db_f
+    self.seq_idx = seq_db_idx
+    self.pro_db  = pro_db_f
+    self.pro_idx = pro_db_idx
+    self.data    = data
+    self.dbeg    = dbeg
+    self.dend    = dend
     self.outdir  = outdir
     self.verbose = verbose
     return
@@ -65,115 +69,164 @@ class WriteProcess (multiprocessing.Process):
     data = []
     line = handle.readline()
     while line and line[0] != '>':
-      row = [ float(x) for x in line.strip().split(',') ]
+      row = numpy.array([ float(x) for x in line.strip().split(',') ])
       data.append(row)
       line = handle.readline()
-    return numpy.array(data)
+    return numpy.vstack(data)
+
+  def _get_fname(self, i):
+    return self.outdir + os.path.sep + self.FILE_PREFIX + str(self.id) + \
+           '_' + str(i) + self.FILE_EXTENSION
 
   def run(self):
     if self.verbose:
       sys.stdout.write('starting proc {}\n'.format(self.id))
 
-    # set up writers
-    writers = []
-    for i in range(self.nfiles):
-      fname = self.outdir + os.path.sep + self.FILE_PREFIX + str(self.id) + \
-              '_' + str(i) + self.FILE_EXTENSION
-      comp = tensorflow.io.TFRecordOptions(compression_type='ZLIB')
-      writ = tensorflow.io.TFRecordWriter(fname, options=comp)
-      writers.append(writ)
+    # set up writer
+    records_per_file = math.ceil((self.dend-self.dbeg)/self.nfiles)
+    writer_id = 0
+    comp = tensorflow.io.TFRecordOptions(compression_type='ZLIB')
+    writ = tensorflow.io.TFRecordWriter(self._get_fname(writer_id),
+                                        options=comp)
 
     # parse and write data
-    with open(seq_db, 'r') as seq_file:
-      with open(pro_db, 'r') as pro_file:
-        writer_id = 0
-        for data_id in self.data:
+    with open(self.seq_db, 'r') as seq_file:
+      with open(self.pro_db, 'r') as pro_file:
+        records_written = 0
+        for i in range(self.dbeg, self.dend):
+          data_id = self.data[i]
           # parse
-          seq = self._get_seq(seq_file, seq_db_index[data_id][0])
-          pro = self._get_pro(pro_file, pro_db_index[data_id])
+          seq = self._get_seq(seq_file, self.seq_idx[data_id])
+          pro = self._get_pro(pro_file, self.pro_idx[data_id])
+          assert seq.shape[0] == pro.shape[0] # sequence lengths are the same
+          assert seq.shape[1] == 11 # 11 amino-acid features
+          assert pro.shape[1] == 20 # 20 amino-acid residues
           # serialize
           record = protmodel.tfserialize.serialize_data(seq, pro)
           # write
-          writers[writer_id].write(record)
-          # iterate 'round the circle of writers
-          writer_id += 1
-          if writer_id == len(writers):
-            writer_id = 0
-
-    # close up file writers
-    for writer in writers:
-      writer.close()
+          writ.write(record)
+          # check if done
+          records_written += 1
+          if records_written > records_per_file:
+            writ.close()
+            records_written = 0
+            writer_id += 1
+            writ = tensorflow.io.TFRecordWriter(self._get_fname(writer_id),
+                                                options=comp)
+        writ.close()
 
     if self.verbose:
       sys.stdout.write('done proc {}\n'.format(self.id))
     return
 
+def _check_data(seq_db_idx, pro_db_idx, train_idxs, valid_idxs, test_idxs):
+  # check that there are no duplicates
+  if len(seq_db_idx) != len(set(seq_db_idx)):
+    return False
+  if len(pro_db_idx) != len(set(pro_db_idx)):
+    return False
+  if len(train_idxs) != len(set(train_idxs)):
+    return False
+  if len(valid_idxs) != len(set(valid_idxs)):
+    return False
+  if len(test_idxs) != len(set(test_idxs)):
+    return False
+  # sequence and profile index arrays should be the same size
+  if len(seq_db_idx) != len(pro_db_idx):
+    return False
+  # there should be nothing shared between train, validate and test indices
+  if len(train_idxs) + len(valid_idxs) + len(test_idxs) != \
+     len(set(train_idxs) | set(valid_idxs) | set(test_idxs)):
+    return False
+  # train+valid+test should be the same size as seq_db_idx
+  if len(seq_db_idx) != len(train_idxs) + len(valid_idxs) + len(test_idxs):
+    return False
+  return True
 
+def _make_shared_array(data):
+  return multiprocessing.Array('Q', data, lock=False)
 
-def setup_writedata(seq_id, pro_id, tvt_split, outdir, verbose):
+def setup_writedata(seq_id, pro_id, tvt_split, verbose):
   """sets up indexing and data for tensorflow data write"""
-  global seq_db_index
-  global pro_db_index
 
   # read sequence index
   if verbose:
     sys.stdout.write('reading sequence index...')
     sys.stdout.flush()
-  seq_db_index = {}
+  tmp_indices = {}
   with open(seq_id, 'r') as handle:
     for line in handle:
       linearr = line.split()
-      sid = linearr[0]
+      sid = int(linearr[0])
       beg = int(linearr[1])
-      lgh = int(linearr[2])
-      seq_db_index[sid] = (beg,lgh)
+      tmp_indices[sid] = beg
+  # convert index dictionary to shared memory array(s)
+  seq_db_idx = multiprocessing.Array('Q', len(tmp_indices.keys()), lock=False)
+  pro_db_idx = multiprocessing.Array('Q', len(tmp_indices.keys()), lock=False)
+  for k,v in tmp_indices.items():
+    seq_db_idx[k] = v
+  del tmp_indices
   if verbose:
     sys.stdout.write('done. found {} sequence indices\n'.format( \
-                     len(seq_db_index.keys())))
+                     len(seq_db_idx)))
 
   # read profile index
   if verbose:
     sys.stdout.write('reading profile index...')
     sys.stdout.flush()
-  pro_db_index = {}
   with open(pro_id, 'r') as handle:
+    idx_read = 0
     for line in handle:
       linearr = line.strip().split(',')
-      sid = linearr[0].split('_')[1]
+      sid = int(linearr[0].split('_')[1])
       idx = int(linearr[1])
-      pro_db_index[sid] = idx
+      pro_db_idx[sid] = idx
+      idx_read += 1
   if verbose:
-    sys.stdout.write('done. found {} profile indices\n'.format( \
-                     len(pro_db_index.keys())))
+    sys.stdout.write('done. found {} profile indices\n'.format(idx_read))
 
   # read train-validate-test split
   if verbose:
     sys.stdout.write('reading tvt split...')
     sys.stdout.flush()
-  tvt_map = {}
+  train_idxs = None
+  valid_idxs = None
+  test_idxs  = None
   with open(tvt_split, 'r') as handle:
     did  = ''
     data = []
     for line in handle:
       if line[0] == '#':
         if did and data:
-          tvt_map[did] = data
+          if did == 'train':
+            train_idxs = _make_shared_array(data)
+          elif did == 'validate':
+            valid_idxs = _make_shared_array(data)
+          elif did == 'test':
+            test_idxs = _make_shared_array(data)
         did = line[1:].strip()
         data = []
       else:
-        data.append(line.strip())
+        data.append(int(line.strip()))
     if did and data:
-      tvt_map[did] = numpy.array(data)
+      if did == 'train':
+        train_idxs = _make_shared_array(data)
+      elif did == 'validate':
+        valid_idxs = _make_shared_array(data)
+      elif did == 'test':
+        test_idxs = _make_shared_array(data)
+    del data
   if verbose:
-    ttl = 0
-    for v in tvt_map.values():
-      ttl += len(v)
+    ttl = len(train_idxs) + len(valid_idxs) + len(test_idxs)
     sys.stdout.write('done. found {} total data\n'.format(ttl))
-    for k,v in tvt_map.items():
-      p = round((len(v) / ttl) * 100, 1)
-      sys.stdout.write('  {}: {} {}%\n'.format(k, len(v), p))
+    p = round((len(train_idxs) / ttl) * 100, 1)
+    sys.stdout.write('     train: {} {}%\n'.format(len(train_idxs), p))
+    p = round((len(valid_idxs) / ttl) * 100, 1)
+    sys.stdout.write('  validate: {} {}%\n'.format(len(valid_idxs), p))
+    p = round((len(test_idxs) / ttl) * 100, 1)
+    sys.stdout.write('      test: {} {}%\n'.format(len(test_idxs), p))
 
-  return tvt_map
+  return (seq_db_idx, pro_db_idx, train_idxs, valid_idxs, test_idxs)
 
 ################################################################################
 # BEG MAIN
@@ -203,6 +256,8 @@ if __name__ == '__main__':
                       metavar='DIR')
   parser.add_argument('--threads', dest='threads', type=int,
                       help='number of threads', metavar='N')
+  parser.add_argument('--files', dest='files', type=int,
+                      help='number of files per thread', metavar='N')
   parser.set_defaults(verbose=True,
                       seq_db=None,
                       seq_id=None,
@@ -210,7 +265,8 @@ if __name__ == '__main__':
                       pro_id=None,
                       tvt_split=None,
                       outdir=None,
-                      threads=0)
+                      threads=0,
+                      files=100)
   # parse command-line arguments
   args = parser.parse_args()
 
@@ -228,21 +284,49 @@ if __name__ == '__main__':
   if args.threads <= 0 or args.threads > os.cpu_count():
     args.threads = os.cpu_count()
 
+  if args.files < 1:
+    args.files = 1
+
   if args.verbose:
     sys.stdout.write('starting...\n')
 
-  seq_db = args.seq_db
-  pro_db = args.pro_db
-  tvt_map = setup_writedata(args.seq_id, args.pro_id,
-                            args.tvt_split, args.outdir, args.verbose)
+  seq_db_idx, \
+  pro_db_idx, \
+  train_idxs, \
+  valid_idxs, \
+  test_idxs   = setup_writedata(args.seq_id, args.pro_id, args.tvt_split,
+                                args.verbose)
 
-  ## write data seems to need to be in main context, not in a function ##
+  # do some data checks
+  if args.verbose:
+    sys.stdout.write('checking data...')
+    sys.stdout.flush()
+  assert _check_data(seq_db_idx, pro_db_idx, train_idxs, valid_idxs, test_idxs)
+  if args.verbose:
+    sys.stdout.write('done.\n')
+
+  # write metadata
+  if args.verbose:
+    sys.stdout.write('writing metadata...')
+    sys.stdout.flush()
+  with open(args.outdir + os.path.sep + 'metadata.txt', 'w') as outf:
+    outf.write('total data records: {}\n'.format(len(seq_db_idx)))
+    outf.write('dta features: 11\n')
+    outf.write('lbl features: 20\n')
+    outf.write('train data records: {}\n'.format(len(train_idxs)))
+    outf.write('validate data records: {}\n'.format(len(valid_idxs)))
+    outf.write('test data records: {}\n'.format(len(test_idxs)))
+  if args.verbose:
+    sys.stdout.write('done.\n')
+
   # parse train-validate-test data
   if args.verbose:
     sys.stdout.write('writing data...\n')
 
   # read-write data
-  for datatype, data in tvt_map.items():
+  for datatype, data in [('train', train_idxs),
+                         ('validate', valid_idxs),
+                         ('test', test_idxs)]:
     if args.verbose:
       sys.stdout.write(' writing {}...\n'.format(datatype))
     # shuffle data ids
@@ -252,17 +336,23 @@ if __name__ == '__main__':
     if not os.path.exists(data_outdir):
       os.mkdir(data_outdir)
 
-    chunksize = int(len(data)/args.threads)
-    file_count = 100
-
+    # set up data writer processes
+    chunksize  = int(len(data)/args.threads)
+    # adjust file count for (smaller) validate, test sets
+    file_count = int(args.files * (len(data)/len(train_idxs)))
+    if file_count < 1:
+      file_count = 1
     writers = []
     for i in range(args.threads):
       beg = i * chunksize
       end = (i+1) * chunksize
-      if i == os.cpu_count()-1:
+      if i == args.threads-1:
         end = len(data)
-      mydata = data[beg:end]
-      writer = WriteProcess(i, file_count, data_outdir, mydata, args.verbose)
+      writer = WriteProcess(i, file_count,
+                            args.seq_db, seq_db_idx,
+                            args.pro_db, pro_db_idx,
+                            data, beg, end,
+                            data_outdir, args.verbose)
       writers.append(writer)
 
     for writer in writers:
